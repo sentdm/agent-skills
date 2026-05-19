@@ -1,6 +1,6 @@
 ---
 name: template-builder-ui
-description: Designs and implements the tenant-facing UI for drafting and submitting WhatsApp templates to Sent. Use when building a template editor, variable picker, component editor (header/body/footer/buttons), live WhatsApp-style preview, category selector, or submission form. Use when a user mentions "template builder", "template editor UI", "tenant template submission", or "make it easy for tenants to build templates". Use when porting Meta's submission rules into client-side validation. Cross-references waba-template-author for the underlying policy.
+description: Designs and implements the tenant-facing UI for drafting and submitting WhatsApp templates to Sent. Use when building a template editor, variable picker, component editor (header/body/footer/buttons), live WhatsApp-style preview, category selector, or submission form. Use when a user mentions "template builder", "template editor UI", "tenant template submission", or "make it easy for tenants to build templates". Use when porting Meta's submission rules into client-side validation. Cross-references waba-template-author for the underlying policy. Do not use for generic templating engines (Jinja, Handlebars, Mustache, email/HTML templates) or non-Sent template systems.
 ---
 
 # Template Builder UI
@@ -93,6 +93,8 @@ Render the template as a WhatsApp chat bubble (green-on-cream for outgoing). Sub
 
 Express Meta's rule set as a single source-of-truth schema and reuse it on the client, in the submission handler, and right before forwarding to Meta. Mirror, don't duplicate — the rules in the three layers must agree exactly.
 
+See `references/template-validation-matrix.md` for the per-channel rule table (SMS / WhatsApp / RCS) and how each failure should surface in the UI. See `references/template-ui-wireflows.md` for the full set of UX flows the builder must support (create-from-scratch, clone, Meta import, JSON paste, edit, submit, reject-recover). See `references/template-status-handling.md` for the lifecycle states, webhook-vs-polling tradeoff, and resubmission flow.
+
 ## Common Rationalizations
 
 | Rationalization | Reality |
@@ -126,3 +128,4 @@ The editor is done when:
 
 - `waba-template-author` — the category decision tree and policy details the UI enforces
 - `messaging-performance-analyzer` — once templates are live, this is how you measure them
+- See top-level `references/sent-glossary.md` for shared Sent terminology.

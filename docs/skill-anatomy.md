@@ -82,11 +82,47 @@ Use cross-skill references when the user intent should hand off to another skill
 
 ## When to Use References
 
-Spill into `references/` when content is:
+Spill into the skill's `references/` when content is:
 
 - Longer than roughly 100 lines.
 - Reference material instead of workflow.
-- Shared by multiple skills.
 - Likely to change independently, such as Meta policy details or status code interpretations.
 
+Single-skill references live at `skills/<name>/references/`. Cross-cutting references shared by every skill live at top-level `references/` (currently only `sent-glossary.md`).
+
 Do not mirror Meta's docs. Link to the authoritative Meta page and keep only the repo-specific interpretation needed to guide the agent.
+
+## Per-skill bundling
+
+Each skill is a self-contained directory. Reference docs and executable scripts live **inside** the skill directory so the skill is portable as a standalone zip (e.g. for upload to claude.ai):
+
+```text
+skills/<name>/
+  ├── SKILL.md
+  ├── references/   ← per-skill reference docs (cited by this SKILL.md)
+  └── scripts/      ← per-skill executables (Python 3.11+, stdlib only)
+```
+
+Reference citations in a SKILL.md resolve **relative to the SKILL.md file**, not the repo root. Write `references/foo.md`, not `../../references/foo.md`.
+
+Only one reference is cross-cutting and lives at the top-level `references/`: `sent-glossary.md`. Everything else belongs inside the citing skill's directory.
+
+## Eval cases
+
+Each skill ships `evals/<skill>.yaml` with 3–5 trigger cases exercising both positive and negative discovery. The format is:
+
+```yaml
+skill: <name>
+cases:
+  - query: "How do I classify a shipping update template?"
+    expect: trigger
+    rationale: "Direct template-classification question — should activate."
+  - query: "Write me a unit test for a React component."
+    expect: no_trigger
+    rationale: "Generic engineering — out of scope."
+  - query: "What's the difference between utility and marketing?"
+    expect: ambiguous
+    rationale: "Could be WhatsApp template category, could be a general marketing question."
+```
+
+`expect` is one of `trigger`, `no_trigger`, or `ambiguous`. Run the suite via `bash scripts/run-evals.sh`.

@@ -1,98 +1,195 @@
 ---
 name: waba-template-author
-description: Authors WhatsApp Business API message templates and classifies them as utility, marketing, or authentication per Meta's policy. Use when a user mentions "WABA template", "WhatsApp template", "template category", or asks how to write a template for a specific use case (OTP, shipping update, promo, abandoned cart, appointment reminder). Use when classification is ambiguous and the user needs Meta-policy guidance to avoid the marketing surcharge. Use when a template was rejected and they need to revise it.
+description: Writes, classifies, and revises WhatsApp templates for Sent, including utility, marketing, and authentication category decisions, variable samples, component structure, rejection-risk review, and Sent template submission. Use when a user says WhatsApp template, WABA template, template category, utility vs marketing, authentication template, Meta rejection, template samples, buttons, or wants approved WhatsApp copy in Sent.
 ---
 
-# WABA Template Author
+<!--
+Verified against Sent sources:
+- https://docs.sent.dm/docs/docs/03-quickstart/first-template
+- https://docs.sent.dm/start/quickstart/first-message
+- https://docs.sent.dm/reference/api
+- Sent v3 OpenAPI: POST /v3/templates, GET /v3/templates, GET /v3/templates/{id}, PUT /v3/templates/{id}, DELETE /v3/templates/{id}, POST /v3/messages
+
+Review notes:
+- Sent docs define templates across SMS, WhatsApp, and RCS, and state that WhatsApp templates require Meta approval.
+- Sent docs verify statuses Draft, Pending, Approved, and Rejected.
+- Treat WhatsApp category rules, rejection reasons, PAUSED status, and Cloud API payloads as Meta-side policy/context unless Sent API responses expose them.
+-->
+
+# WABA template author
 
 ## Overview
 
-Meta classifies every WhatsApp Business template into one of three categories — **utility**, **marketing**, or **authentication** — and prices conversations differently based on that category. Misclassifying a marketing template as utility gets it re-categorized (often silently), inflates billing, and risks template pausing. This skill walks through authoring a template, classifying it correctly, and minimizing rejection risk.
+Use this skill to write WhatsApp template content that can be represented as a Sent template, submitted for WhatsApp review where required, and later sent through `POST /v3/messages` with `template.id`. The skill’s job is not just to produce polished copy; it must choose the right category, structure components correctly, provide realistic sample values, and flag review risks before submission.
 
-## When to Use
+Sent stores templates as reusable message blueprints across SMS, WhatsApp, and RCS. WhatsApp review and category enforcement come from Meta, but the Sent-facing workflow uses Sent’s `/v3/templates` endpoints and Sent template statuses.
 
-Use when the user is:
-- Drafting a new template and needs help with category, components, or variables
-- Unsure whether their use case is utility or marketing
-- Investigating a rejected template or a template that was re-categorized by Meta
-- Building or extending a template library across multiple use cases
+## When to use
 
-Do **not** use this skill for:
-- The submission UI itself — use `template-builder-ui`
-- Template *performance* analysis (open rate, delivery) — use `messaging-performance-analyzer`
+Use this skill when the user asks for WhatsApp template copy, WABA template creation, utility/marketing/authentication classification, template rejection fixes, variable samples, buttons, headers, template categories, Meta approval risk, or a Sent template payload for WhatsApp.
 
-## Classification Decision Tree
+Do not use this skill to design the whole template-management UI; use `template-builder-ui`. Do not use it to connect a WABA or phone number; use `waba-embedded-signup`. Do not use it to register SMS compliance; use `sms-10dlc-registration`.
 
-```
-What triggers the message?
-├── User just requested a code or login → AUTHENTICATION
-│   (use authentication template type, not a regular template with a code in the body)
-│
-├── User-initiated event/transaction (purchase, booking, payment, password change,
-│   account update, shipping status, appointment, recurring statement) → UTILITY
-│   ├── Is the message about THAT event? → UTILITY
-│   └── Does it cross-sell, promote, or invite back? → MARKETING
-│
-└── Business-initiated outreach (announcement, promo, win-back, newsletter,
-    abandoned cart, lead nurture, product launch) → MARKETING
-```
+## Category decision
 
-Heuristics that flip a draft from utility → marketing in Meta's review:
-- Discount codes, "shop now", "buy", emojis like 🎉🛍️ in body
-- Calls to action that aren't tied to the triggering event
-- Re-engagement language ("we miss you", "come back")
-- Promotional imagery in the header
+Pick the narrowest truthful WhatsApp category. Do not force promotional content into utility. The category should match the recipient’s expectation, the opt-in context, and the actual copy.
 
-## Authoring Workflow
+| Category | Use when | Avoid when |
+|---|---|---|
+| Utility | The message is tied to an existing transaction, account, order, appointment, or service request. | The copy includes upsell, acquisition, abandoned cart, discount, or broad engagement language. |
+| Marketing | The message promotes, re-engages, cross-sells, announces offers, or encourages optional action not tied to an existing transaction. | The message is purely required service/account information. |
+| Authentication | The message delivers one-time passcodes or verification flows. | The message includes non-authentication content or marketing. |
 
-1. **Capture the use case in one sentence.** "After a customer pays, confirm the order and link to the receipt." If you can't write this, the template isn't ready.
-2. **Pick the category** using the decision tree. If ambiguous, default to marketing — Meta will too.
-3. **Pick the language code.** Use the exact BCP-47 code (`en_US`, `pt_BR`, not `en`). Each language is a separate template.
-4. **Design components in order:**
-   - **Header** (optional): text (60 char max, 1 variable max) OR media (image/video/document) OR location.
-   - **Body** (required): 1024 char max, supports `{{1}}`, `{{2}}`, … placeholders. Every variable needs a sample value at submission.
-   - **Footer** (optional): 60 char max, no variables. Use for compliance text ("Reply STOP to opt out").
-   - **Buttons** (optional): up to 3 quick replies OR up to 2 call-to-action (URL or phone). Cannot mix quick reply + CTA in the same template.
-5. **Insert variables with samples.** Submit `{{1}}` with sample `John`, `{{2}}` with `#A1029`, etc. Meta rejects submissions whose sample text *looks* promotional even if the template wording is neutral.
-6. **Name the template** in `snake_case`, prefixed by use case: `order_confirmation_v3`, not `template1`. The name is permanent per (name, language).
-7. **Submit and watch the status webhook.** Statuses: `PENDING` → `APPROVED` | `REJECTED` | `PAUSED`. Re-categorization shows up as a status update with a new `category` field.
+**Example.** “Your order 1234 shipped and arrives tomorrow” is utility. “Your order shipped — add accessories for 20% off” is marketing risk because it adds promotional content.
 
-For component rules, character limits, and the exact Cloud API request shape, see `references/waba-template-categories.md`.
+## Process
 
-## Common Rationalizations
+### 1. Capture the business intent
 
-| Rationalization | Reality |
+Ask what event triggers the template, who receives it, what action the recipient should take, and whether the message contains any promotion. Write those answers before drafting copy.
+
+A strong intent statement is specific: “Send a delivery reschedule link after a courier misses the first attempt.” A weak one says: “Notify users about updates.”
+
+### 2. Choose the category before writing copy
+
+Drafting before category selection often creates copy that fails review. Choose utility, marketing, or authentication first, then write within that boundary.
+
+If the user wants utility but includes promotional language, explain the conflict and offer two options: remove promotion and keep utility, or keep promotion and classify as marketing.
+
+### 3. Draft the component structure
+
+Represent the template in Sent-compatible component language: header, body, footer, buttons, variables, and samples. Keep the component set as simple as the use case allows.
+
+| Component | Guidance |
 |---|---|
-| "It's clearly utility, I'll mark it utility and save money." | Meta's classifier reviews wording, buttons, and intent. Aggressive classification gets templates re-categorized within hours of first send. |
-| "I'll put the discount in the footer so it stays utility." | Promotional content anywhere in the template — body, footer, header media, button labels — flips it to marketing. |
-| "The header image is just branding." | A promotional header image (sale banner, product collage) re-categorizes the template. Use neutral imagery or skip the header. |
-| "Variables let me reuse one template for promos and receipts." | Re-categorization is per-template, not per-message. One promotional send paused for that template hurts every other use case sharing it. |
-| "Auth templates work like utility templates with an OTP variable." | Authentication templates are a distinct template type with their own component schema, button rules, and validity-period support. Don't put OTPs in regular templates. |
+| Header | Use only when it clarifies identity or context. Avoid promotional headers for utility templates. |
+| Body | Put the required message and variables here. Keep the first sentence clear without needing the button. |
+| Footer | Use for low-emphasis context such as opt-out or support where appropriate. |
+| Buttons | Use quick replies or call-to-action buttons only when they directly support the message intent. |
+| Variables | Use stable names and provide realistic samples for every variable. |
 
-## Red Flags
+### 4. Write with review risk in mind
 
-- The draft's body would feel natural in an email newsletter → marketing, not utility
-- The CTA button leads to a homepage or category page → marketing
-- The same template is being asked to cover "confirmation AND upsell" → split into two templates
-- Sample variable values include offer codes, discounts, or product lists → reclassify to marketing before submitting
-- The template name contains `promo`, `offer`, `winback`, or `cross_sell` but the category is utility
+Use concise, literal copy. Avoid vague urgency, misleading scarcity, or mixed intents. Do not include sensitive data unless the use case requires it and the customer confirms it is acceptable.
 
-## Verification
+**Utility example.**
 
-Before submitting, confirm:
-- [ ] Use case fits in one sentence and the category follows the decision tree
-- [ ] Every variable has a non-promotional sample value
-- [ ] Buttons are either all quick replies OR all CTAs, not mixed
-- [ ] Header text/footer text are within character limits (60 each)
-- [ ] Body is ≤ 1024 chars and reads as if it could be sent without any promotional intent
-- [ ] Language code is BCP-47 (`en_US`, not `en`)
-- [ ] Name is `snake_case` and includes a version suffix (`_v1`, `_v2`)
+```text
+Name: order_shipped_update
+Category: Utility
+Language: en_US
+Body: Hi {{first_name}}, your {{brand_name}} order {{order_id}} has shipped and is expected on {{delivery_date}}. Track it here: {{tracking_url}}.
+Samples:
+  first_name: Alex
+  brand_name: Acme
+  order_id: A12345
+  delivery_date: May 22
+  tracking_url: https://acme.example/t/A12345
+Button: Track order -> {{tracking_url}}
+```
 
-After submission, confirm:
-- [ ] Status webhook fired with `APPROVED` (not `PENDING` indefinitely — that often means review failure)
-- [ ] Category in the approval matches what you submitted; if Meta re-categorized, revise wording and resubmit under a new version
+**Marketing example.**
 
-## Related Skills
+```text
+Name: spring_sale_announcement
+Category: Marketing
+Language: en_US
+Body: Hi {{first_name}}, {{brand_name}} spring deals are live. Use code {{promo_code}} by {{end_date}} to save on selected items.
+Samples:
+  first_name: Alex
+  brand_name: Acme
+  promo_code: SPRING20
+  end_date: May 31
+Button: Shop now -> https://acme.example/sale
+```
 
-- `template-builder-ui` — the tenant-facing form that produces submissions following these rules
-- `messaging-performance-analyzer` — post-send analysis of how the approved template performs
+### 5. Convert the draft into a Sent template operation
+
+Use Sent’s template API for creation and lifecycle management. The verified operations are:
+
+| Operation | Endpoint | Use |
+|---|---|---|
+| Create template | `POST /v3/templates` | Save a draft or submit a new template. |
+| List templates | `GET /v3/templates` | Find templates by search, status, or category. |
+| Retrieve template | `GET /v3/templates/{id}` | Inspect status and definition. |
+| Update template | `PUT /v3/templates/{id}` | Revise name, category, language, definition, or submit for review. |
+| Delete template | `DELETE /v3/templates/{id}` | Delete the Sent template, optionally deleting from Meta where supported. |
+
+Use Sent’s documented statuses in user-facing instructions: Draft, Pending, Approved, and Rejected. If Meta returns additional statuses for a WhatsApp account, quote them as Meta-side evidence rather than Sent-global statuses.
+
+### 6. Add variable samples before submission
+
+Every placeholder needs a realistic sample. Samples should look like production data and should not add claims that the body does not support.
+
+**Bad sample pattern.** Body says “Your appointment is confirmed,” but sample data includes “50% off visit.” This can create category confusion.
+
+**Good sample pattern.** Body and sample values all support the same transactional use case.
+
+### 7. Revise rejected templates from the reason, not from guesses
+
+If a template is rejected, retrieve the Sent template detail/status and any available rejection reason. Then change only what the reason justifies. Category mismatch, missing samples, unsupported components, and promotional language in utility templates require different fixes.
+
+| Rejection symptom | Likely correction |
+|---|---|
+| Category mismatch | Change category or remove conflicting copy. |
+| Missing/weak samples | Add realistic variable samples. |
+| Unsupported component | Simplify header/buttons or split channel variants. |
+| Policy concern | Remove misleading, sensitive, or prohibited content. |
+| Language mismatch | Correct language code and localized text. |
+
+### 8. Confirm sendability after approval
+
+After approval, confirm the template can be used with the intended Sender Profile/channel and sent through `POST /v3/messages` with `template.id`. If delivery later fails, hand off to `messaging-performance-analyzer` rather than rewriting approved copy blindly.
+
+## Common rationalizations to avoid
+
+Do not call a template utility if it includes discounts, upsells, abandoned-cart messaging, or broad engagement language.
+
+Do not omit sample values because the placeholders are obvious. Review and test flows need rendered examples.
+
+Do not treat Meta Cloud API payload examples as the Sent API contract. Use Sent `/v3/templates` for Sent integrations.
+
+Do not introduce `PAUSED` as a Sent template status unless the account’s Sent API/event payload returns it.
+
+Do not rewrite a rejected template without reading the actual rejection reason when available.
+
+## Verification checklist
+
+- [ ] The trigger event, audience, recipient action, and promotional content are documented.
+- [ ] Category is chosen before copy is drafted.
+- [ ] The body is clear without relying on a button.
+- [ ] Every variable has a realistic sample value.
+- [ ] Component choices match the selected channel and use case.
+- [ ] Sent template API endpoints are used for create/list/get/update/delete.
+- [ ] Status handling uses Draft, Pending, Approved, and Rejected unless account evidence shows more.
+- [ ] Rejection fixes map to observed reasons, not generic rewrites.
+- [ ] Approved templates are tested through Sent sending with `template.id` before broad rollout.
+
+## Related skills
+
+Use `sent-skills:template-builder-ui` when the task is UI design, component validation, JSON editor behavior, or template-management product specs.
+
+Use `sent-skills:waba-embedded-signup` when the WhatsApp sender/WABA/phone number is not connected to Sent yet.
+
+Use `sent-skills:sender-profile-architect` when the template belongs to a specific tenant, brand, department, or profile boundary.
+
+Use `sent-skills:sms-10dlc-registration` when WhatsApp copy will be mirrored to SMS and must align with US A2P use-case registration.
+
+Use `sent-skills:messaging-performance-analyzer` when approved WhatsApp templates have poor delivery, read, or webhook outcomes.
+
+## Suggested bundled references and scripts
+
+| File | Type | Purpose |
+|---|---|---|
+| `references/waba-template-categories.md` | Policy lookup table | Keep detailed Meta category rules, component limits, and rejection codes outside the skill body. |
+| `references/waba-template-examples.md` | Worked examples | Provide approved-style examples for utility, marketing, and authentication templates. |
+| `references/template-rejection-playbook.md` | Decision matrix | Map rejection reasons to precise edits. |
+| `scripts/lint_waba_template.py` | Validation script | Check placeholders, samples, category-risk phrases, button structure, and language code before submission. |
+| `scripts/render_template_samples.py` | Utility script | Render variable samples into final copy for reviewer preview. |
+
+## Unverified claims to confirm or remove
+
+- Meta statuses such as `PAUSED` were not verified as Sent template statuses.
+- Exact category-pricing behavior and Meta rejection-code semantics are external policy context, not Sent API facts.
+- The exact Sent template request schema fields should be rechecked against the live OpenAPI before generating production payloads.
+- Cloud API endpoint examples belong in Meta-specific references and should not replace Sent `/v3/templates` usage.

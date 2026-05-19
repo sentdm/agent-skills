@@ -1,128 +1,172 @@
 ---
 name: template-builder-ui
-description: Designs and implements the tenant-facing UI for drafting and submitting WhatsApp templates to Sent. Use when building a template editor, variable picker, component editor (header/body/footer/buttons), live WhatsApp-style preview, category selector, or submission form. Use when a user mentions "template builder", "template editor UI", "tenant template submission", or "make it easy for tenants to build templates". Use when porting Meta's submission rules into client-side validation. Cross-references waba-template-author for the underlying policy.
+description: Designs and audits a Sent template builder UI for cross-channel SMS, WhatsApp, and RCS templates, including component editing, variable samples, status handling, channel-specific validation, and submission workflows. Use when a user says template builder, template editor, Sent templates, WhatsApp template UI, RCS template, SMS template, Meta import, JSON template, approval status, or wants a product spec for template creation.
 ---
 
-# Template Builder UI
+<!--
+Verified against Sent sources:
+- https://docs.sent.dm/docs/docs/03-quickstart/first-template
+- https://docs.sent.dm/start/quickstart/first-message
+- https://docs.sent.dm/start/quickstart/dashboard-walkthrough
+- Sent v3 OpenAPI: POST /v3/templates, GET /v3/templates, GET /v3/templates/{id}, PUT /v3/templates/{id}, DELETE /v3/templates/{id}, POST /v3/messages, /v3/webhooks/event-types
+
+Review notes:
+- Sent docs define templates as reusable message blueprints across SMS, WhatsApp, and RCS.
+- Sent docs verify dashboard creation paths: sample, scratch, Meta import, and JSON definition.
+- Sent docs verify template statuses Draft, Pending, Approved, and Rejected. Treat Meta-only statuses such as PAUSED as external unless Sent webhook event types expose them.
+-->
+
+# Template builder UI
 
 ## Overview
 
-Tenants don't read Meta's template policy — they expect the UI to keep them on the rails. A good template builder catches every Meta rejection reason *before* the user clicks submit, renders a faithful WhatsApp preview as they type, and converts "I want to send a notification" into a valid Cloud API submission payload. This skill is the WhatsApp-specific UX playbook — the parts where Meta's rules force decisions a generic form builder won't make on its own.
+Use this skill to design or improve a Sent template builder UI. Sent templates are reusable message blueprints across SMS, WhatsApp, and RCS. The UI must let users create valid templates, preview channel-specific rendering, supply variable samples, submit for review where required, and understand status without exposing irrelevant provider internals.
 
-## When to Use
+The Sent v3 template API supports create, list, retrieve, update, and delete operations. The first-message workflow sends templates through `POST /v3/messages` using a `template.id`. A good UI therefore optimizes both authoring and later sendability.
 
-Use when:
-- Building or refactoring a tenant template editor
-- Implementing the live WhatsApp preview pane
-- Adding a category picker that explains utility vs marketing vs authentication
-- Mirroring Meta's component, character, and button rules in client-side validation
-- Designing the submission feedback loop (status webhook → UI state)
+## When to use
 
-Do **not** use for:
-- The category decision logic itself — that lives in `waba-template-author`
-- Backend submission to Meta's API — that's an integration concern, not UI
-- SMS or RCS template editors — those are a separate UX problem (no live preview equivalent, no category, no header/body/footer split)
+Use this skill when the user asks for a template builder, template editor, template management UI, template validation, Meta import flow, JSON template builder, WhatsApp approval UI, RCS rich template editor, SMS template preview, template status page, or a product/engineering spec for Sent templates.
 
-## The Editor Anatomy (build in this order)
+Do not use this skill to write final WhatsApp template copy; use `waba-template-author`. Do not use it to decide Sender Profile boundaries; use `sender-profile-architect`. Do not use it to diagnose delivery failures after sends; use `messaging-performance-analyzer`.
 
-```
-┌─────────────────────────────────────────────────────┐
-│ 1. Category picker     (utility / marketing / auth) │  ← affects every field below
-│ 2. Name + language     (snake_case + BCP-47)        │  ← immutable after first save
-├─────────────────────────────────────────────────────┤
-│ 3. Components (live-validated)        │  4. Preview │
-│    ├── Header (optional)              │   ┌───────┐ │
-│    │   ├── type: text / image / video │   │       │ │
-│    │   └── max 1 variable             │   │ chat  │ │
-│    ├── Body (required)                │   │bubble │ │
-│    │   ├── 1024 char max              │   │       │ │
-│    │   └── variables with samples     │   └───────┘ │
-│    ├── Footer (optional, 60 char)     │             │
-│    └── Buttons (quick reply OR CTA)   │             │
-├─────────────────────────────────────────────────────┤
-│ 5. Variable sample editor (sticky)                  │
-│ 6. Submit + rejection-feedback panel                │
-└─────────────────────────────────────────────────────┘
-```
+## Product principles
 
-### Category Picker (Step 1)
+A Sent template UI should make the valid path obvious and the invalid path hard. Users should understand three things at all times: what channels the template targets, what variables need examples, and whether the template is editable, pending, approved, or rejected.
 
-Show all three categories with one-line definitions and an example. Make this the **first** field; everything downstream depends on it.
+| Principle | UI behavior | Why it matters |
+|---|---|---|
+| Channel-first editing | User chooses SMS, WhatsApp, RCS, or combinations before components. | Component support differs by channel. |
+| Variable-first validation | Every variable has a sample value before review/submission. | Reviewers and test sends need concrete rendered examples. |
+| Status-aware actions | Drafts can be edited; pending/approved/rejected states guide next action. | Users should not unknowingly break reviewed content. |
+| Provider-specific details are scoped | WhatsApp category and Meta import appear only where WhatsApp applies. | Keeps cross-channel UI from becoming WhatsApp-only. |
+| JSON escape hatch | Advanced users can paste/edit JSON with schema validation. | Sent docs include JSON definition as a creation path. |
 
-- **Utility** — Triggered by a user action (order placed, appointment booked, password reset). Example: "Your order #1029 has shipped."
-- **Marketing** — Business-initiated promo or outreach. Example: "Black Friday 50% off — shop now."
-- **Authentication** — OTPs and login codes. Uses a separate template type with special button rules.
+## Process
 
-Selecting **authentication** swaps the entire component editor to the auth-template shape — the body is read-only ("Your code is {{1}}. For your security, do not share this code."), buttons collapse to a single "Copy code" or "One-tap" choice, and a `code_expiration_minutes` field appears.
+### 1. Start with the template intent and channels
 
-### Name + Language (Step 2)
+Ask what the template is for before showing component controls. Intent drives category, variables, and review risk. Then ask which channels the user wants to support.
 
-- Enforce `^[a-z][a-z0-9_]{0,511}$` on name; auto-`snake_case` what the user types.
-- Surface the rule that `(name, language)` is permanent — show a `_v1` suffix suggestion to make versioning ergonomic.
-- Language picker: BCP-47 from Meta's supported list, not a free-form input. Show the locale name plus the code (`en_US — English (US)`).
+**Example.** “Order shipped” targeting SMS, WhatsApp, and RCS should start from one intent but render differently: SMS may be plain text, WhatsApp may need a utility category and sample variables, and RCS may use richer actions if configured.
 
-### Component Editor (Step 3)
+### 2. Model the Sent template lifecycle
 
-The WhatsApp-specific rules the editor must enforce:
+Use Sent’s documented statuses in the UI: Draft, Pending, Approved, and Rejected. Do not introduce provider-only states as global Sent states unless Sent event types or API responses expose them for the account.
 
-- **Header**: radio for type (none / text / image / video / document / location). Only show the corresponding sub-form. Text header is 60 chars and one variable.
-- **Body**: when the user types `{{`, autocomplete the next available index. Show running char count vs 1024. Variables must be inserted *in order* (`{{1}}` before `{{2}}`) — gaps are a silent Meta rejection reason.
-- **Footer**: single-line input, 60 chars, no variables.
-- **Buttons**: a button-type radio at the top — *no buttons* / *quick replies* / *CTAs*. The radio is what prevents the "mixed buttons" rejection — never offer per-button type selection.
-  - Quick replies: up to 3, 25 char labels.
-  - CTAs: up to 2, mixable across URL and phone-number. URL CTAs may take one trailing variable (e.g. `https://example.com/orders/{{1}}`).
+| Status | UI meaning | Allowed primary action |
+|---|---|---|
+| Draft | Saved but not submitted. | Edit, preview, validate, submit. |
+| Pending | Submitted for review/approval where required. | View, cancel if supported, duplicate. |
+| Approved | Available for production sends where channel setup allows. | Use in send flow, duplicate for revision. |
+| Rejected | Review failed or validation blocked approval. | View reason, revise, resubmit or duplicate. |
 
-### Variable Sample Editor (Step 5)
+Although the OpenAPI says `PUT /v3/templates/{id}` can update name, category, language, definition, or submit for review, the UI should still protect approved templates with a “duplicate and revise” path when auditability matters. Present immutability as a product-safety choice, not a Sent API fact.
 
-Pin a sticky panel at the bottom or right edge. As the user inserts variables, add a labeled row: `{{1}} — sample: [ John ]`. Submission to Meta requires non-empty samples; an empty input here should block the submit button.
+### 3. Back the UI with Sent template endpoints
 
-Critical, and WhatsApp-specific: **warn the user when sample values look promotional**. A simple word check (`off`, `sale`, `discount`, `deal`, `free`, `now`, …) on samples should flash a "samples should be neutral" warning. Most surprise re-categorizations trace back to promotional samples.
+Keep the UI contract aligned to the verified v3 template operations.
 
-### Live Preview (right pane)
+| UI action | Endpoint | Notes |
+|---|---|---|
+| Create template | `POST /v3/templates` | Create with header, body, footer, buttons, and review/draft intent. |
+| List/search templates | `GET /v3/templates?page=&pageSize=&search=&status=&category=` | Support filtering by status, category, and search. |
+| Open template detail | `GET /v3/templates/{id}` | Show name, category, language, status, and definition. |
+| Save/update | `PUT /v3/templates/{id}` | Update editable fields or submit for review. |
+| Delete | `DELETE /v3/templates/{id}` | Optionally delete from Meta where supported by the API request. |
+| Send test after approval | `POST /v3/messages` | Use `template.id` and channel selection. |
 
-Render the template as a WhatsApp chat bubble (green-on-cream for outgoing). Substitute samples in real time. If samples are empty, show `{{1}}` literally and dim it to signal "this will fail submission". Render media headers as placeholders until uploaded.
+Use optional `Idempotency-Key` headers when create/update requests may be retried by the frontend or backend.
 
-### Submission Feedback (Step 6)
+### 4. Design the editor around components
 
-- On submit, send to your backend, which POSTs to Meta. Show an optimistic `PENDING` row in the template list immediately.
-- Subscribe the UI to template-status webhooks via your existing realtime channel. On `APPROVED` / `REJECTED` / `PAUSED`, update the row.
-- On `REJECTED`, show Meta's `reason` plus a human-friendly remediation hint mapped from the rejection-code dictionary. Don't show the raw Meta JSON.
-- **On silent re-categorization** (status stays APPROVED but `category` changes), surface a banner — this is otherwise invisible to tenants and they get billed for marketing without realizing it.
+Represent the template as a structured definition rather than one text blob. Sent’s docs describe template components such as header, body, footer, and buttons, with practical support differences across SMS, RCS, and WhatsApp.
 
-## Validation Strategy
+| Component | UI guidance | Channel notes |
+|---|---|---|
+| Header | Optional title/media area with clear preview. | Most relevant to WhatsApp/RCS; validate per selected channel. |
+| Body | Required main content with variable insertion. | Needed across channels; SMS preview should show plain-text length behavior. |
+| Footer | Optional low-emphasis text. | Useful for compliance or context where supported. |
+| Buttons/actions | Explicit button type and target. | Validate per channel; do not allow unsupported combinations. |
+| Variables | Named or positional placeholders with sample values. | Samples are required for review and testing. |
 
-Express Meta's rule set as a single source-of-truth schema and reuse it on the client, in the submission handler, and right before forwarding to Meta. Mirror, don't duplicate — the rules in the three layers must agree exactly.
+### 5. Make validation staged and explainable
 
-## Common Rationalizations
+Run validation in layers so users know whether a problem is a Sent schema issue, a channel support issue, or a policy/review issue.
 
-| Rationalization | Reality |
-|---|---|
-| "I'll show all 3 category options and let Meta sort it out." | Submissions take 1-30 min to review; tenants hate the cycle. Catch the policy issue in the UI. |
-| "Sample values are an afterthought." | They're the #1 cause of re-categorization. The UI must make them prominent, not optional. |
-| "Button type is just three checkboxes." | Quick replies and CTAs cannot coexist; expose the choice as a radio at the top, not per-button. |
-| "Re-categorization is rare — I don't need a banner." | It's silent and billed. Tenants assume APPROVED means stable. The banner is the only way they'll know. |
+| Layer | Example error | Fix |
+|---|---|---|
+| Required fields | “Body is required.” | Add body content. |
+| Variable samples | “`{{order_id}}` has no sample value.” | Add a realistic sample. |
+| Channel support | “SMS cannot render this rich button.” | Remove button for SMS or split channel variants. |
+| WhatsApp review risk | “Marketing language in a utility template may be rejected or reclassified.” | Change category or remove promotional content. |
+| JSON schema | “Definition does not match Sent template shape.” | Correct JSON before save. |
 
-## Red Flags
+**Example validation.** If a utility WhatsApp template says “Your order shipped. Add 20% off accessories today,” the UI should warn that promotional content conflicts with utility intent. For SMS, the same content may be syntactically valid but still must align with 10DLC use-case registration.
 
-- A category picker that's a dropdown buried in step 4
-- Variable inserts without an autocomplete index — tenants will type `{{3}}` before `{{1}}` and not realize Meta rejects it
-- No client-side variable-sample input — the user discovers it on submit
-- Buttons UI that allows mixing quick replies with CTAs
-- Rejection feedback that shows raw Meta JSON
-- No realtime update — tenant has to refresh to see APPROVED
-- No banner when Meta silently re-categorizes a template
+### 6. Support Sent’s creation paths
 
-## Verification
+Sent docs describe dashboard creation from a sample, from scratch, from Meta import, and from JSON definition. Mirror those paths where relevant.
 
-The editor is done when:
-- [ ] Meta's component rules are encoded in one schema reused across client, submission handler, and Meta-forwarding code
-- [ ] Category selection happens first and reshapes the editor when switching to authentication
-- [ ] Variable samples are required, with a promotional-language warning
-- [ ] Mixed button types are impossible to construct in the UI
-- [ ] Status webhook events update the template row in realtime
-- [ ] Silent re-categorization surfaces as a visible tenant-facing banner
+| Path | Best for | UI requirement |
+|---|---|---|
+| Sample | New users and common templates | Curated examples with editable variables. |
+| Scratch | Product teams building custom flows | Guided component editor. |
+| Meta import | Existing WhatsApp template libraries | Import review, mapping, and status reconciliation. |
+| JSON definition | Developers and migrations | Schema validation, diff view, and clear errors. |
 
-## Related Skills
+### 7. Preview the send path, not only the design
 
-- `waba-template-author` — the category decision tree and policy details the UI enforces
-- `messaging-performance-analyzer` — once templates are live, this is how you measure them
+An approved template is only useful if it can be sent. Add a test-send preview that asks for Sender Profile/channel context, recipient test number, variable values, and sandbox/production mode where applicable. Show that production sending uses `POST /v3/messages` with the selected `template.id`.
+
+## Common rationalizations to avoid
+
+Do not build a WhatsApp-only UI and call it a Sent template builder. Sent templates span SMS, WhatsApp, and RCS.
+
+Do not mark name/language/category immutable as a Sent API fact. The verified update endpoint can update those fields; immutability is a product governance decision.
+
+Do not show provider policy warnings globally. Only show WhatsApp-specific category/review warnings when WhatsApp is selected.
+
+Do not hide sample values in an advanced panel. Missing or unrealistic samples are a common review and testing failure.
+
+Do not rely on frontend validation alone. The backend should validate the Sent request shape and preserve API error messages for users.
+
+## Verification checklist
+
+- [ ] The UI starts with template intent and target channels.
+- [ ] Statuses match Sent’s documented Draft, Pending, Approved, and Rejected states.
+- [ ] Template CRUD maps to verified `/v3/templates` endpoints.
+- [ ] Variables cannot be submitted without sample values.
+- [ ] Component validation is channel-aware for SMS, WhatsApp, and RCS.
+- [ ] WhatsApp-specific category/review warnings are scoped to WhatsApp templates.
+- [ ] JSON definition mode validates schema before save.
+- [ ] Test-send preview uses `POST /v3/messages` with `template.id` after approval/readiness checks.
+
+## Related skills
+
+Use `sent-skills:waba-template-author` when the task is to write or classify WhatsApp template content.
+
+Use `sent-skills:sms-10dlc-registration` when SMS template copy must match a US A2P campaign use case or opt-out evidence.
+
+Use `sent-skills:rcs-agent-onboarding` when RCS templates depend on agent approval, fallback behavior, or rich-rendering tests.
+
+Use `sent-skills:sender-profile-architect` when template ownership, profile scoping, or tenant boundaries are unclear.
+
+Use `sent-skills:messaging-performance-analyzer` when an approved template sends poorly or webhook evidence shows failures.
+
+## Suggested bundled references and scripts
+
+| File | Type | Purpose |
+|---|---|---|
+| `references/template-validation-matrix.md` | Lookup table | List component support, variable rules, and channel-specific restrictions without bloating the skill body. |
+| `references/template-ui-wireflows.md` | Worked examples | Show sample, scratch, Meta import, and JSON creation flows. |
+| `references/template-status-handling.md` | Decision matrix | Map Sent status and provider review outcomes to UI actions. |
+| `scripts/validate_template_definition.py` | Validation script | Validate a JSON template definition against required fields, variable samples, and channel support. |
+| `scripts/extract_template_variables.py` | Utility script | Parse body/header/button text and return missing sample values. |
+
+## Unverified claims to confirm or remove
+
+- A universal `PAUSED` template status in Sent was not verified; Sent docs list Draft, Pending, Approved, and Rejected.
+- Name/language/category immutability after first save contradicts the verified update endpoint if stated as an API limitation.
+- Exact WhatsApp component limits and mixed-button rules require Meta policy/reference validation; keep them in WhatsApp-specific references.
+- Webhook event names for template status changes were not verified in the extracted OpenAPI; discover them through `/v3/webhooks/event-types` for the account.

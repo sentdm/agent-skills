@@ -1,233 +1,168 @@
 ---
 name: waba-embedded-signup
-description: Implements Meta's WhatsApp Business Embedded Signup flow end-to-end — Facebook Login for Business, the JS SDK launch, the `WA_EMBEDDED_SIGNUP` postMessage event that returns `waba_id` + `phone_number_id` + auth code, the code-for-token exchange, debug-token introspection (fallback path), phone-number registration, and post-signup webhook subscription. Use when adding Embedded Signup to a multi-tenant app on Sent, integrating Meta's OAuth as a Tech Provider or Solution Partner, onboarding new tenants via Meta, or debugging a stuck or failed signup. Use when the user mentions "embedded signup", "FBL", "Facebook Login for Business", "Meta onboarding", "BSP partner flow", `config_id`, or `WA_EMBEDDED_SIGNUP` sessionInfo.
+description: Guides WhatsApp Business Account connection for Sent Sender Profiles, including Embedded Signup planning, WABA and phone-number mapping, token/security handling, webhook readiness, and profile completion. Use when a user says Embedded Signup, WABA, connect WhatsApp, WhatsApp sender, phone number ID, Facebook Login for Business, Meta Business, sender profile WhatsApp setup, or webhooks not firing after WhatsApp signup.
 ---
+
+<!--
+Verified against Sent sources:
+- https://docs.sent.dm/start/quickstart/dashboard-walkthrough
+- https://docs.sent.dm/start/quickstart/channel-setup
+- https://docs.sent.dm/reference/api
+- Sent v3 OpenAPI: /v3/profiles, /v3/profiles/{profileId}, /v3/profiles/{profileId}/complete, /v3/webhooks, /v3/webhooks/{id}/test, /v3/webhooks/{id}/events, /v3/webhooks/{id}/rotate-secret
+
+Review notes:
+- Sent docs verify Sender Profiles and WhatsApp configuration status in the dashboard, but the extracted Sent docs/API did not expose a public Sent-specific Embedded Signup endpoint.
+- Treat Meta Graph API calls, Facebook Login for Business configuration, system-user tokens, WABA subscription, and phone-number registration as external Meta implementation details unless Sent confirms they are required for the integration path.
+- Anchor Sent-side completion to Sender Profile configuration and /v3/profiles/{profileId}/complete.
+-->
 
 # WABA Embedded Signup
 
 ## Overview
 
-Embedded Signup is Meta's flow for letting a tenant connect their WhatsApp Business Account to your platform without leaving your app. Done right, it takes ~2 minutes and links the WhatsApp half of a Sender Profile end-to-end. Done wrong, tenants drop off, support tickets pile up, and you end up debugging opaque Graph API errors in production. This skill walks the full end-to-end: prerequisites, the JS launch + `WA_EMBEDDED_SIGNUP` event handling, the backend exchange, phone-number registration, app subscription, and the most common ways the flow gets stuck.
+Use this skill to connect a WhatsApp Business Account (WABA) and phone number to a Sent Sender Profile without confusing Sent-side setup with Meta-side implementation details. Sent’s dashboard exposes Sender Profiles and WhatsApp configuration status. Sent’s profile API exposes profile CRUD and a profile-completion workflow. The public Sent sources reviewed for this rewrite did not expose a dedicated Embedded Signup endpoint, so direct Meta Graph flows should be treated as external integration context unless the user confirms that their application owns that flow.
 
-## When to Use
+The safest workflow is to decide the integration path first: Sent-managed WhatsApp setup, customer-managed Meta Embedded Signup connected back to Sent, or a hybrid implementation coordinated with Sent.
 
-Use when:
-- Adding Embedded Signup to an app for the first time
-- A tenant signup is stuck at a specific step
-- Migrating from the legacy WhatsApp signup to Embedded Signup
-- Migrating from the older `debug_token` extraction pattern to the current `sessionInfo` event pattern
-- A Meta app is being reviewed and you need to verify the flow
+## When to use
 
-Do **not** use for:
-- Designing the tenant data model around the WABA — use `sender-profile-architect`
-- The SMS or RCS halves of a Sender Profile — use `sms-10dlc-registration` or `rcs-agent-onboarding`
-- Sending the first message after signup completes — that's regular Cloud API work
+Use this skill when the user mentions Embedded Signup, WABA, WhatsApp Business Account, WhatsApp phone number, phone number ID, Facebook Login for Business, Meta Business Manager, connecting WhatsApp to Sent, WhatsApp sender setup, Sender Profile WhatsApp status, or webhook delivery after WhatsApp onboarding.
 
-## Prerequisites (don't skip)
+Do not use this skill to author WhatsApp templates; use `waba-template-author`. Do not use it to build a generic Meta app unless the user explicitly asks for a Meta-side implementation. Do not claim Sent exposes Embedded Signup endpoints unless the account/docs confirm them.
 
-Signup will silently fail if any of these are missing. Verify each before touching code:
+## Process
 
-1. **Tech Provider / Solution Partner status** with Meta — apply via the Meta Business Suite. Required for revenue-share or hosted billing.
-2. **A Meta app** in App Dashboard with these products added:
-   - WhatsApp
-   - Facebook Login for Business
-3. **A `config_id`** from Meta — created in your app's *Facebook Login for Business → Configurations*. The config defines which permissions and assets are requested; you cannot use a generic FBL config.
-4. **Allowlisted redirect URIs** in the FBL config — every signup environment (`https://app.example.com`, `https://staging.example.com`, `http://localhost:3000`) must be listed.
-5. **A System User** in your Meta Business with admin access to your app. The auth code exchanges into a System User token that owns the new WABA.
-6. **Webhook URL** registered on the WhatsApp product, with signing secret stored.
+### 1. Decide the integration path first
 
-Capture all of these in `.env` (or your secrets manager) and *fail-fast in CI* if any are missing.
+Start every session by asking which path applies. The answer changes what the agent should do next.
 
-For the exact field names, scopes, and example payloads, see `references/waba-embedded-signup-spec.md`.
-
-## The Flow End-to-End
-
-```
-[Tenant browser]                    [Your backend]              [Meta Graph API]
-       │                                  │                            │
-       │ 1. user clicks "Connect WhatsApp"│                            │
-       │ 2. FB.login({config_id, extras}) │                            │
-       │ 3. window listens for            │                            │
-       │    WA_EMBEDDED_SIGNUP message    │                            │
-       │─── opens Meta dialog ─────────────────────────────────────────▶
-       │                                  │                            │
-       │ 4a. WA_EMBEDDED_SIGNUP event:    │                            │
-       │     phone_number_id, waba_id,    │                            │
-       │     business_id                  │                            │
-       │ 4b. FB.login callback: { code }  │                            │
-       │─── POST /signup/callback ───────▶│                            │
-       │     { code, phone_number_id,     │                            │
-       │       waba_id, business_id }     │                            │
-       │                                  │ 5. exchange code → token   │
-       │                                  │───────────────────────────▶│
-       │                                  │◀────── access_token ───────│
-       │                                  │ 6. register phone number   │
-       │                                  │───────────────────────────▶│
-       │                                  │ 7. subscribe app to WABA   │
-       │                                  │───────────────────────────▶│
-       │                                  │ 8. verify subscription     │
-       │                                  │───────────────────────────▶│
-       │ 9. show Sender Profile connected │                            │
-       │ ◀────────────────────────────────│                            │
-```
-
-### Step 2-4 — Launch + capture the session
-
-The current SDK gives you the WABA ID and phone-number ID directly via a `postMessage` event. You no longer have to introspect the token to discover them (that path still works as a fallback for older `config_id`s — see below).
-
-```html
-<script async src="https://connect.facebook.net/en_US/sdk.js"></script>
-<script>
-  // Always install the message listener BEFORE launching, or you'll miss the event.
-  window.addEventListener('message', (event) => {
-    if (!event.origin.endsWith('facebook.com')) return;
-    try {
-      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-      if (data.type === 'WA_EMBEDDED_SIGNUP') {
-        if (data.event === 'FINISH') {
-          // data.data has { phone_number_id, waba_id, business_id }
-          window.__waSessionInfo = data.data;
-        } else if (data.event === 'CANCEL') {
-          // user dismissed at step `data.data.current_step`
-        } else if (data.event === 'ERROR') {
-          // surface data.data.error_message to the tenant
-        }
-      }
-    } catch (_) { /* ignore */ }
-  });
-
-  FB.init({ appId: 'YOUR_APP_ID', version: 'v23.0' });
-
-  function launchSignup() {
-    FB.login(function (response) {
-      const session = window.__waSessionInfo || null;
-      if (response.authResponse && response.authResponse.code) {
-        fetch('/signup/whatsapp/callback', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ code: response.authResponse.code, session })
-        });
-      }
-    }, {
-      config_id: 'YOUR_CONFIG_ID',
-      response_type: 'code',
-      override_default_response_type: true,
-      extras: { feature: 'whatsapp_embedded_signup', version: 3 }
-    });
-  }
-</script>
-```
-
-`config_id` is required. `extras.feature: 'whatsapp_embedded_signup'` is what activates the WABA-specific UI inside the Meta dialog. Without it, the dialog falls back to a generic FBL flow that won't fire the `WA_EMBEDDED_SIGNUP` event.
-
-### Step 5 — Code exchange
-
-```
-GET https://graph.facebook.com/v23.0/oauth/access_token
-  ?client_id=APP_ID
-  &client_secret=APP_SECRET
-  &redirect_uri=ALLOWLISTED_URI
-  &code=CODE
-```
-
-Returns `{ access_token, token_type, expires_in }`. Store this token associated with the *tentative* WhatsApp sender record (state = `connecting`).
-
-For production, exchange to a System User token (long-lived) before persisting.
-
-### Step 5b — Fallback: extract IDs from `debug_token` (legacy config IDs)
-
-If the SDK did not deliver a `WA_EMBEDDED_SIGNUP` event (older `config_id`, browser blocked the `postMessage`, or a tenant on a non-default flow), introspect the token to recover the IDs:
-
-```
-GET https://graph.facebook.com/debug_token
-  ?input_token=USER_TOKEN
-  &access_token=APP_ID|APP_SECRET
-```
-
-The response's `granular_scopes` array contains `whatsapp_business_management` and `whatsapp_business_messaging`, each with a `target_ids` list. To recover the `waba_id` cleanly, list owned WABAs:
-
-```
-GET https://graph.facebook.com/v23.0/{business_id}/owned_whatsapp_business_accounts
-```
-
-Treat this path as a fallback, not the primary. The `WA_EMBEDDED_SIGNUP` event is the supported flow now.
-
-### Step 6 — Register the phone number
-
-The phone number you got in Step 4 is *not* registered for Cloud API until you call:
-
-```
-POST https://graph.facebook.com/v23.0/{phone_number_id}/register
-  body: { messaging_product: 'whatsapp', pin: '<6-digit pin>' }
-```
-
-The PIN is the two-factor PIN for Cloud API. Generate one server-side, store it (encrypted) on the WhatsApp sender record, and re-use it for any future re-registration. Without registration the phone number cannot send.
-
-### Step 7 — Subscribe your app to the WABA
-
-```
-POST https://graph.facebook.com/v23.0/{waba_id}/subscribed_apps
-```
-
-This is **easy to forget**, and without it your webhook silently never fires. Always do this in the same transaction as the rest of the signup.
-
-### Step 8 — Verify subscription
-
-```
-GET https://graph.facebook.com/v23.0/{waba_id}/subscribed_apps
-```
-
-Your app should appear in `data[]`. Until you've read this back, do not declare the WhatsApp sender `active`.
-
-## Common Stuck States and Fixes
-
-| Symptom | Likely cause | Fix |
+| Path | Use when | Agent role |
 |---|---|---|
-| Dialog opens, closes immediately, no event or code returned | Redirect URI not allowlisted, or `config_id` mismatched between init and login | Verify both in App Dashboard |
-| Got the auth code but no `WA_EMBEDDED_SIGNUP` event | Older `config_id` lacking the embedded-signup feature, or message listener installed too late | Update the `config_id` to enable `whatsapp_embedded_signup`; install listener before `FB.login()`; or fall back to `debug_token` extraction |
-| Code exchange returns `OAuthException` 100 | App not approved for FBL, or wrong `client_secret` | Check app status; rotate secret if leaked |
-| `debug_token` shows no `whatsapp_business_management` scope | Tenant unchecked the WhatsApp permission in the dialog | Re-launch and emphasize the permission is required |
-| Phone numbers list is empty | Tenant didn't link a number in the dialog | Re-launch; some tenants need to create a WABA from scratch inside the dialog |
-| Webhooks never fire after signup | Forgot Step 7 (subscribe app to WABA) | Hit `/subscribed_apps` and verify the app is in the list |
-| Token expires unexpectedly | Used a short-lived user token instead of a System User token | Always exchange to a System User token for production |
-| `register` returns `133005` or `133006` | PIN wrong, or phone-number eligibility issue | Reset the PIN in WhatsApp Manager and retry |
+| Sent-managed setup | The customer wants Sent to guide or operate WhatsApp connection. | Prepare Sender Profile, business evidence, phone-number details, and handoff notes. |
+| Customer-managed Embedded Signup | The customer’s app launches Meta Embedded Signup and passes results to Sent. | Review Meta-side security and mapping, then align results to Sent profile completion. |
+| Migration/import | The customer already has a WABA/phone number and needs it represented in Sent. | Collect WABA/phone identifiers, ownership evidence, and profile mapping. |
 
-## Common Rationalizations
+If the user cannot answer, default to Sent-managed setup and avoid prescribing Graph API calls.
 
-| Rationalization | Reality |
+### 2. Identify the Sender Profile
+
+Locate or create the Sender Profile that will own the WhatsApp sender identity. Use the Sent dashboard or `/v3/profiles`. Record the Sent profile ID, `x-sender-id` if visible, display name, brand description, and intended WhatsApp phone number.
+
+A WhatsApp number should map to the same recipient-visible brand represented by the profile. If the number belongs to a different brand, department, or tenant, use `sender-profile-architect` before proceeding.
+
+### 3. Collect WhatsApp onboarding evidence
+
+Collect the minimum evidence needed for Sent or Meta review.
+
+| Evidence | Why it matters |
 |---|---|
-| "I'll skip the System User token — the user token works." | User tokens expire in 60 days and revoke on password change. Production must use System User. |
-| "I'll subscribe to webhooks once globally, not per-WABA." | App-level webhook config picks the URL; per-WABA subscription is what actually opens the firehose for that account. Both are required. |
-| "Embedded Signup auto-registers the phone number." | It does not. Step 6 (register with PIN) is your responsibility. |
-| "The `config_id` is just an ID — any FBL config works." | Only configs created with the WhatsApp Embedded Signup feature produce the right flow and the `WA_EMBEDDED_SIGNUP` event. Generic FBL configs silently downgrade. |
-| "I'll do this synchronously inside the OAuth callback." | Steps 5-8 take 2-10s and call multiple Meta endpoints. Run async with a job queue; show progress to the tenant. |
-| "I'll still use `debug_token` since that's what the old docs say." | That path still works, but the SDK now gives you the IDs directly via the `WA_EMBEDDED_SIGNUP` event. Use it as primary and `debug_token` as fallback. |
+| Business legal name and Meta Business identity | Confirms the WABA belongs to the intended sender. |
+| Public website and privacy policy | Supports business verification and template review. |
+| Phone number and ownership/control evidence | Prevents connecting the wrong sender. |
+| Display name | Must match the business identity recipients expect. |
+| Use cases and example messages | Drives template authoring and policy review. |
+| Webhook endpoint and owner | Needed to verify event delivery after connection. |
 
-## Red Flags
+### 4. Map external identifiers without making them the Sent contract
 
-- No `message` event listener installed before `FB.login()` — you'll miss the `WA_EMBEDDED_SIGNUP` event
-- Listener doesn't validate `event.origin` against `facebook.com` — accepting any origin is an XSS vector
-- The `config_id` is hardcoded in client JS but never validated server-side
-- Tokens stored as plaintext, not encrypted at rest
-- No retry logic on Steps 5-8 — any transient Meta failure leaves the WhatsApp sender half-provisioned
-- Phone-number registration PIN reused across Sender Profiles
-- No verification step that `subscribed_apps` actually contains your app post-signup
-- Signup completion is declared on Step 5 (code received) instead of Step 8 (webhook subscription verified)
+If the user provides WABA ID, phone-number ID, Meta Business ID, or System User details, store them as external provider identifiers mapped to the Sent profile. Do not make those IDs the primary application sender key. Use Sent profile ID and Sent message IDs for Sent operations.
 
-## Verification
+**Example mapping.**
 
-A complete Embedded Signup integration should:
-- [ ] Fail fast in CI if any prerequisite env var is missing
-- [ ] Install a `message` listener that validates `event.origin` *before* calling `FB.login()`
-- [ ] Use a System User token, not a user access token, in production
-- [ ] Persist WhatsApp-sender state transitions explicitly (`provisioned` → `connecting` → `connected` → `active`)
-- [ ] Register the phone number and verify the registration succeeded
-- [ ] Subscribe the app to the WABA and read it back to confirm
-- [ ] Send a test message (or check `phone_number_status`) before declaring the WhatsApp sender active
-- [ ] Surface a useful error to the tenant for each known stuck state above
-- [ ] Use a current Graph API version (the spec doc tracks the version Sent currently targets)
+```text
+sent_profile_id: 2b1b...
+x_sender_id: support_us
+channel: whatsapp
+provider: meta
+provider_business_id: external value, if available
+provider_waba_id: external value, if available
+provider_phone_number_id: external value, if available
+status_source: Sent dashboard/API or Meta integration logs
+```
 
-## Related Skills
+### 5. Complete or re-check the Sent profile
 
-- `sender-profile-architect` — what to do with the WABA and phone numbers once signup succeeds
-- `waba-template-author` — the first thing tenants do after connecting is submit templates
+Use `/v3/profiles/{profileId}/complete` when prerequisites are ready and API completion is in scope. The OpenAPI describes profile completion as a background process that validates prerequisites and connects profile configuration. If completion returns missing prerequisites, fix those inputs rather than creating duplicate profiles.
+
+### 6. Verify webhook readiness
+
+Use Sent webhook endpoints to confirm event delivery. Verify the webhook exists, the relevant event types are available, and a test event reaches the customer endpoint. Inspect `/v3/webhooks/{id}/events` when customer logs and Sent state disagree.
+
+Rotate webhook secrets only when needed and coordinate deployment, because secret rotation invalidates the old secret immediately.
+
+## Meta-side implementation review
+
+Use this section only when the user confirms that their application owns Embedded Signup. Label the work as Meta-side. Validate security, mapping, and callback handling before connecting results to Sent.
+
+| Area | Check |
+|---|---|
+| Launch context | Embedded Signup is launched from the right app, business, and allowed origin. |
+| Callback handling | The app captures the signup result, not just a UI success state. |
+| Token exchange | Authorization codes/tokens are exchanged server-side, never in public frontend storage. |
+| Scope verification | Returned permissions/granular scopes match the required WABA and phone-number access. |
+| Identifier lookup | WABA ID and phone-number ID are read back and mapped to the Sent profile. |
+| Phone registration | Registration is completed only if the integration path requires the customer app to do it. |
+| App subscription | Webhook subscription is completed only if the integration path requires direct Meta callbacks. |
+| Secret handling | Tokens and webhook secrets are encrypted, rotated, and not logged. |
+
+Do not assume the customer app must call every Meta endpoint. Sent may abstract parts of onboarding depending on the customer’s setup.
+
+## Troubleshooting patterns
+
+| Symptom | First check | Likely next step |
+|---|---|---|
+| Sender Profile still shows WhatsApp not configured | Sent profile prerequisites and completion status | Confirm whether Sent-managed setup or external Embedded Signup results were expected. |
+| User completed Meta flow but Sent cannot send | Mapping between external phone/WABA and Sent profile | Provide identifiers/evidence to Sent or update integration mapping. |
+| Templates remain unavailable | Template status and WhatsApp business review | Use `waba-template-author` and Sent template status. |
+| Webhooks not firing | Sent webhook test and event history | Fix endpoint/subscription before blaming WhatsApp delivery. |
+| Wrong tenant receives events | Profile/message ID mapping | Use `sender-profile-architect` to redesign routing. |
+
+## Common rationalizations to avoid
+
+Do not treat a Meta UI success screen as proof that Sent can send WhatsApp messages. Verify Sent profile/channel status and test sends.
+
+Do not store access tokens in browser storage or logs. Treat Meta tokens and Sent webhook secrets as production credentials.
+
+Do not assume a WABA can be reused across unrelated brands or tenants. Recipient-visible identity and operational ownership matter.
+
+Do not hardcode Graph API version, scope names, or endpoint sequences in this skill body. Keep those in a reference file and re-check Meta docs or Sent implementation guidance before use.
+
+Do not rotate Sent webhook secrets without coordinating the receiving endpoint.
+
+## Verification checklist
+
+- [ ] The integration path is identified as Sent-managed, customer-managed Embedded Signup, or migration/import.
+- [ ] The correct Sent Sender Profile is identified before external identifiers are mapped.
+- [ ] WhatsApp business identity, phone-number evidence, display name, and use cases are collected.
+- [ ] WABA/phone-number IDs are stored as external identifiers, not as the primary Sent sender key.
+- [ ] Profile completion is run or checked after prerequisites are ready.
+- [ ] Sent webhook existence, event types, event history, and test delivery are verified.
+- [ ] Meta Graph steps are only prescribed when the user confirms direct ownership of Embedded Signup.
+- [ ] Tokens, webhook secrets, and callback data are handled server-side and securely.
+
+## Related skills
+
+Use `sent-skills:sender-profile-architect` when deciding whether a WABA or phone number belongs in a separate Sender Profile.
+
+Use `sent-skills:waba-template-author` when the WhatsApp sender needs templates written, categorized, submitted, or revised.
+
+Use `sent-skills:template-builder-ui` when building the UI that imports or manages WhatsApp templates inside Sent.
+
+Use `sent-skills:messaging-performance-analyzer` when WhatsApp sends are connected but delivery/read/webhook outcomes are poor.
+
+## Suggested bundled references and scripts
+
+| File | Type | Purpose |
+|---|---|---|
+| `references/waba-embedded-signup-spec.md` | External platform reference | Keep Meta launch, token exchange, WABA lookup, phone registration, and subscription details out of the skill body. |
+| `references/whatsapp-sender-profile-mapping.md` | Schema reference | Define how Sent profile IDs map to WABA IDs, phone-number IDs, display names, and status evidence. |
+| `references/waba-onboarding-runbook.md` | Worked example | Show Sent-managed and customer-managed onboarding examples end-to-end. |
+| `scripts/verify_whatsapp_mapping.py` | Validation script | Check that required Sent profile fields and external identifiers are present before completion/testing. |
+| `scripts/test_sent_webhook_delivery.py` | Validation script | Trigger Sent webhook tests and compare against receiver logs. |
+
+## Unverified claims to confirm or remove
+
+- A public Sent Embedded Signup endpoint was not verified in the extracted Sent docs/API.
+- Required Meta app type, Tech Provider/Solution Partner status, granular scopes, and Graph endpoint sequence are external Meta claims, not Sent API facts in this pass.
+- Mandatory direct phone-number registration or WABA subscription by the customer app depends on integration path and was not verified as a universal Sent requirement.
+- Exact Sent webhook payload fields for WhatsApp sender events were not verified; use account event types and observed payloads.

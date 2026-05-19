@@ -1,170 +1,180 @@
 ---
 name: sender-profile-architect
-description: Plans multi-tenant application architecture around Sent's Sender Profile — the per-tenant abstraction that unifies SMS (10DLC/TCR brand+campaign), WhatsApp (WABA + phone numbers + access tokens), and RCS (RBM agent) into one sending identity. Use when designing tenant isolation, sender provisioning, channel routing, webhook fan-out, or rate-limit accounting for a multi-tenant messaging app on Sent. Use when a user asks "how do I model tenants and sender profiles", "how should I route an inbound webhook to the right tenant", or "how do I scope rate limits per profile across SMS/WhatsApp/RCS". Covers pooled vs siloed trade-offs, the profile lifecycle, and per-channel rate accounting.
+description: Designs Sent Sender Profile architecture for multi-tenant, multi-brand, or multi-channel messaging systems, including profile boundaries, profile-scoped credentials, webhooks, compliance inheritance, and channel readiness. Use when a user says sender profile, x-sender-id, profile setup, multi-tenant messaging, brand isolation, department sender, webhook routing, tenant offboarding, or asks how to model SMS, WhatsApp, and RCS senders in Sent.
 ---
 
-# Sender Profile Architect
+<!--
+Verified against Sent sources:
+- https://docs.sent.dm/start/quickstart/dashboard-walkthrough
+- https://docs.sent.dm/start/quickstart/channel-setup
+- https://docs.sent.dm/reference/api
+- Sent v3 OpenAPI: /v3/profiles, /v3/profiles/{profileId}, /v3/profiles/{profileId}/complete, /v3/brands, /v3/brands/{brandId}/campaigns, /v3/webhooks, /v3/webhooks/{id}/events, /v3/webhooks/{id}/test, /v3/webhooks/{id}/rotate-secret
+
+Review notes:
+- Sent dashboard docs verify Sender Profiles, display name, brand description, x-sender-id, and channel configuration status.
+- Sent v3 OpenAPI verifies profile CRUD and profile completion. It does not prove a strict one-API-key-per-profile model, so this skill uses “profile-scoped credentials” rather than stronger claims.
+- Treat routing-key tables, tenant state machines, and webhook correlation strategies as application architecture guidance unless a field is present in Sent responses/events.
+-->
+
+# Sender profile architect
 
 ## Overview
 
-In a multi-tenant messaging app on Sent, the question that breaks naive designs is: *which tenant does this inbound event belong to, and which channel's quirks does it carry?* Sent's **Sender Profile** is the abstraction that solves both — a stable, tenant-scoped record that unifies the SMS brand+campaign registration with TCR, the WhatsApp Business Account (WABA), and the RCS Business Messaging (RBM) agent under one sending identity, with one API key. This skill helps design the Sender Profile data model, lifecycle, and the surrounding multi-tenant patterns so the architecture survives 10x growth without re-platforming.
+Use this skill to decide how a customer should map brands, tenants, departments, and channels onto Sent Sender Profiles. A Sender Profile is the durable boundary for sender identity and channel configuration. The Sent dashboard shows each profile with display name, brand description, `x-sender-id`, and SMS/WhatsApp configuration status. The v3 API exposes profile creation, listing, retrieval, update, deletion, and completion.
 
-A Sender Profile is the unit of:
-- **Tenant isolation** — billing meters, quotas, and access scoping all anchor here
-- **Channel routing** — one profile owns the SMS, WhatsApp, *and* RCS sending identities a tenant uses
-- **Webhook attribution** — inbound delivery events from carriers, Meta, and Google route back via the profile
+Good profile architecture prevents three recurring failures: messages sent from the wrong brand, compliance resources shared across incompatible use cases, and webhook/event data that cannot be routed back to the correct tenant.
 
-## When to Use
+## When to use
 
-Use when:
-- Designing the data model for tenants, sender profiles, and per-channel sender records (TCR campaigns, WABAs, RBM agents)
-- Routing inbound delivery events from any of the three channels to the right tenant
-- Scoping rate limits, billing, or quotas per tenant across channels
-- Choosing between pooled and isolated tenancy
-- Planning the profile lifecycle (provisioning → channel-by-channel verification → suspension)
+Use this skill when the user asks how to create Sender Profiles, split one customer into multiple senders, model a marketplace or ISV, isolate brands, route webhooks, handle profile-scoped API credentials, complete profile setup, or safely offboard a tenant. Use it whenever the request mentions `x-sender-id`, Sender Profile, profile completion, multi-tenant messaging, brand hierarchy, SMS/WhatsApp/RCS sender setup, or webhook routing.
 
-Do **not** use for:
-- The Embedded Signup flow that *creates* the WhatsApp half of a profile → use `waba-embedded-signup`
-- TCR brand + campaign submission for SMS → use `sms-10dlc-registration`
-- RBM agent creation + verification for RCS → use `rcs-agent-onboarding`
-- Template authoring or analysis — use `waba-template-author` / `messaging-performance-analyzer`
+Do not use this skill to decide 10DLC use cases in detail, write WhatsApp template copy, onboard RCS approval, or analyze delivery failures. Hand those to the related skills once the profile boundary is clear.
 
-## Sender Profile as the Tenancy Primitive
+## Profile boundary principle
 
-```
-Tenant (your customer)
-   └── Sender Profile (1..N)                    ← the unit of isolation
-        ├── API key (one per profile)
-        │
-        ├── SMS sender:
-        │   ├── Phone number(s) / short code(s)
-        │   ├── TCR Brand ID
-        │   └── TCR Campaign ID(s)              ← carrier filtering keys
-        │
-        ├── WhatsApp sender:
-        │   ├── WABA ID (Meta)
-        │   ├── System User access token
-        │   └── Phone Number(s)                 ← phone_number_id is the WA webhook key
-        │
-        └── RCS sender:
-            ├── RBM Agent ID (Google)
-            └── Verified domains, capabilities, fallback policy
-```
+Create a separate Sender Profile when the sender identity, compliance evidence, webhook routing, operational ownership, or channel readiness must be isolated. Reuse a profile when the same legal/brand identity sends the same class of traffic and should share compliance posture and operational controls.
 
-Why "Sender Profile" — not "Tenant", not "WABA", not "TCR Brand" — is the right granularity:
-- A tenant may run multiple brands (multiple profiles)
-- A profile may host any combination of the three channels — some profiles are SMS-only, some span all three
-- Inbound webhooks arrive from three different carriers/platforms and must converge on one tenant view
-
-Every channel-specific resource you store should reference the **Sender Profile ID**, not the tenant ID directly. Tenant ID is one foreign key on the profile.
-
-## Pooled vs Siloed Decision
-
-The basics of pooled-vs-siloed multi-tenancy are well-covered elsewhere; what matters for a messaging platform on Sent is the constraints unique to messaging:
-
-| Concern | Pooled (one shared store, tenant scoped) | Siloed (per-tenant store) |
+| Split signal | Create separate profiles when | Reuse a profile when |
 |---|---|---|
-| Cost at small scale | Low | High |
-| Onboarding a new profile | Instant; the work is the per-channel registration, not infra | Requires infra provisioning *plus* per-channel registration |
-| Message-content storage (PHI / residency) | Hard to claim isolation | Easy |
-| Cross-channel funnel analytics | Single query | Pipeline per silo |
-| TCR campaign sharing across tenants | Trivial (each tenant owns its own campaign) | Same; tenancy doesn't change TCR |
+| Brand identity | The recipient sees different brand names or support contacts. | The recipient sees one brand across all messages. |
+| Compliance | 10DLC brand/campaign, opt-in source, or use case differs materially. | Compliance evidence and use case are the same. |
+| Channel configuration | SMS, WhatsApp, or RCS resources belong to different brands or regions. | Channels represent one sender identity. |
+| Webhook routing | Events must land in different tenant queues or data stores. | One team owns all events and reconciliation. |
+| Lifecycle | One sender may be paused, restricted, or offboarded independently. | Senders always launch, pause, and retire together. |
 
-**Default to pooled** for the Sender Profile and message-event metadata. Silo only when a tenant pays for it or a regulator requires it. Hybrid pattern: pooled compute, pooled profile metadata, but **siloed message-content storage** for tenants with PHI or strict residency requirements.
+## Process
 
-For decision criteria and the messaging-specific reconciliation / offboarding patterns, see `references/multi-tenancy-patterns.md`.
+### 1. Draw the recipient-visible sender model
 
-## Sender Profile Lifecycle (state machine)
+Start with what the recipient sees, not with internal account hierarchy. Ask: “Would the recipient reasonably think these messages came from the same sender?” If the answer is no, use separate profiles.
 
-A profile's overall state is the *minimum* state across its enabled channels. Track per-channel state independently and surface the rollup.
+**Example.** A healthcare ISV serves three clinic chains. Each chain has its own patient-facing brand, privacy policy, and support phone. Create one profile per clinic chain. Do not put all clinics behind a single ISV profile just because the same platform sends the messages.
 
-```
-provisioned ──► connecting ──► partially_active ──► active
-     │              │                  │                │
-     ▼              ▼                  ▼                ▼
-  failed       disconnected        suspended       restricted
-                                       │
-                                       └──► restoring ──► active
-```
+### 2. Map each profile to channel readiness
 
-States and what owns them:
+For each proposed profile, list SMS, WhatsApp, and RCS readiness separately. Sent’s channel setup guidance covers production setup for all three channels and recommends using the same phone number across SMS, WhatsApp, and RCS where possible. That recommendation does not override compliance or brand isolation.
 
-- **provisioned** — Profile exists; no channel linked yet.
-- **connecting** — Tenant has started at least one channel onboarding (Embedded Signup, TCR submission, RBM agent creation).
-- **partially_active** — At least one channel is sending, but others are still pending verification. Common steady state during onboarding.
-- **active** — All enabled channels are sending. Quality / vetting scores tracked.
-- **suspended** — Carrier or platform has restricted *one* channel (e.g. WABA quality drop, TCR campaign paused, RBM agent suspended). Other channels may still be sending.
-- **restricted** — All channels blocked.
-- **disconnected** — Token expired or revoked on at least one channel; needs re-auth via the channel-specific onboarding skill.
-
-Each channel carries its own sub-state alongside the rollup. Persist that explicitly — don't infer it by hitting upstream APIs on every request. Track when each channel was last reconciled so you know how stale each is.
-
-## Webhook Routing
-
-Each channel pushes its own webhook stream with its own routing key. The job is to converge them on the Sender Profile.
-
-| Channel | Inbound source | Routing key in payload |
+| Channel | Profile-level questions | Follow-up skill |
 |---|---|---|
-| SMS | Carrier (via Sent) | Sender phone / short code + TCR campaign ID |
-| WhatsApp | Meta | WABA ID + `phone_number_id` |
-| RCS | Google RBM (via Sent) | `agentId` |
+| SMS | Is US A2P involved? Which brand/campaign and opt-in evidence apply? | `sms-10dlc-registration` |
+| WhatsApp | Which WABA/phone number identity maps to this brand? Are templates approved? | `waba-embedded-signup`, `waba-template-author` |
+| RCS | Has Sent initiated setup and carrier approval for this profile? Is SMS fallback ready? | `rcs-agent-onboarding` |
 
-For each event, the handler should:
+### 3. Create or update the Sent profile
 
-1. Verify the signature against the *channel's* secret (Meta `X-Hub-Signature-256` with app secret; carrier-specific HMAC for SMS; RBM service-account JWT for RCS).
-2. Resolve the routing key to a Sender Profile.
-3. Enqueue per-profile (or per-tenant) so a noisy tenant doesn't block another.
-4. ACK fast — every platform retries on 5xx and times out (Meta ~15s, Google ~10s, carriers vary).
+Use Sent’s profile API where API access is appropriate, or the dashboard when the user is operating manually. The verified v3 API includes:
 
-Never put per-webhook business logic in the webhook handler — enqueue and return 200 immediately.
+| Operation | Endpoint | Use |
+|---|---|---|
+| Create profile | `POST /v3/profiles` | Create a sender boundary for a brand, department, tenant, or use case. |
+| List profiles | `GET /v3/profiles` | Audit existing profile boundaries before creating duplicates. |
+| Retrieve profile | `GET /v3/profiles/{profileId}` | Inspect detailed profile configuration. |
+| Update profile | `PATCH /v3/profiles/{profileId}` | Change profile configuration/settings. |
+| Delete profile | `DELETE /v3/profiles/{profileId}` | Soft-delete a profile after traffic, webhooks, and credentials are drained. |
+| Complete setup | `POST /v3/profiles/{profileId}/complete` | Validate prerequisites and start the profile completion workflow. |
 
-## Rate Limits & Quotas
+Use idempotency keys on create/update/complete calls when the integration might retry. The OpenAPI exposes an optional `Idempotency-Key` header for those operations.
 
-You account for limits at three layers on every channel. Track per-channel; bill at the profile.
+### 4. Attach compliance and channel prerequisites before completion
 
-| Channel | Carrier / platform limit |
-|---|---|
-| SMS | TCR campaign throughput (TPS), assigned after vetting; per-carrier filtering |
-| WhatsApp | Phone-number tier (1K / 10K / 100K / unlimited business-initiated conversations per 24h); Cloud API CPS cap |
-| RCS | Agent QPS imposed by Google; per-carrier delivery throttling |
+The profile completion endpoint validates prerequisites such as profile data, brand, campaigns, and channel connections. For US A2P SMS, create or attach Sent brand and campaign resources before completing the profile. The verified brand/campaign endpoints are `/v3/brands` and `/v3/brands/{brandId}/campaigns`.
 
-Plus **your per-profile quota** — whatever you sell. Enforce at the Sender Profile layer.
+Do not invent field names such as `tcr_brand_id` or `waba_phone_id` unless the actual API response includes them. Store Sent IDs returned by the API and any returned provider identifiers separately, with clear names.
 
-Bill against the Sender Profile, not the tenant — a tenant with three brands gets three meters.
+**Example data model.**
 
-## Common Rationalizations
+```text
+sender_profiles
+- sent_profile_id
+- x_sender_id
+- display_name
+- brand_description
+- status_app_level
+- sms_ready_app_level
+- whatsapp_ready_app_level
+- rcs_ready_app_level
 
-| Rationalization | Reality |
-|---|---|
-| "I'll just key everything by WABA." | Plenty of Sent customers don't have a WABA — they're SMS-only or RCS-only. Sender Profile is the only key that works across channels. |
-| "Tenant is enough — I don't need Sender Profile." | The moment a tenant runs two brands (or mixes SMS-only and WhatsApp-only brands), the model breaks. Profile is a five-minute decision today and a six-month migration in two years. |
-| "Pooled is too risky for an enterprise tenant." | Pooled with strict access boundaries is what every messaging platform does. Silo as an upsell, not a default. |
-| "I'll process the webhook synchronously — it's just a status update." | At scale, a single WhatsApp phone number or SMS campaign can push hundreds of events per second. Synchronous processing kills throughput. Always enqueue. |
-| "I can share one Meta System User token across profiles." | One revoked token now disables every profile. One System User per WABA. |
+sender_profile_resources
+- sent_profile_id
+- channel
+- sent_resource_id
+- provider_resource_type
+- provider_resource_id
+- status_last_seen_at
+```
 
-## Red Flags
+### 5. Design webhook routing around Sent event evidence
 
-- A message attributed to a tenant but with no Sender Profile or per-channel routing key behind it
-- Webhook handlers doing real work before ACKing
-- No per-channel state — sender state is recomputed from upstream API calls on demand
-- Rate limits enforced at the HTTP-request layer, not at the Sender Profile / per-channel-sender layer
-- No staleness tracking per channel
-- The same Meta access token, TCR API key, or RBM service account shared across multiple Sender Profiles
-- "SMS-only" customers force-fitted into a WhatsApp-shaped model
+Sent’s v3 webhook API supports creating/listing webhooks, retrieving event types, viewing webhook events, testing a webhook, toggling status, and rotating signing secrets. Use those endpoints to verify configuration and delivery before blaming channel infrastructure.
 
-## Verification
+Route inbound events by stable identifiers present in the Sent payload. If the exact event payload fields are not documented for the customer’s account, log full events in a secure staging environment and derive the routing map from observed Sent fields rather than assumed provider keys.
 
-A sound Sender Profile architecture has:
-- [ ] Sender Profile sits between Tenant and every channel-specific sender; nothing channel-specific attaches directly to Tenant
-- [ ] A documented state machine with explicit transitions — per channel and at the profile rollup
-- [ ] Webhook routing that resolves each channel's routing key to a Sender Profile fast and enqueues per profile
-- [ ] Workers that can be scaled per tenant or per profile (no single global queue)
-- [ ] Rate-limit accounting at the Sender Profile *and* per-channel-sender layer, not at request time
-- [ ] A documented escalation path for `suspended`, `restricted`, and `disconnected` states per channel (re-auth flow, ops alert)
+**Example.** If a marketplace needs tenant-specific queues, route first by Sent profile or sender identifier if present in the event. Fall back to a mapping table from Sent message ID to tenant/profile created at send time. Avoid making provider IDs the only routing key.
 
-## Related Skills
+### 6. Model profile lifecycle as an application state machine
 
-- `waba-embedded-signup` — the flow that links the WhatsApp half of a Sender Profile
-- `sms-10dlc-registration` — the flow that registers a TCR brand + campaign on a Sender Profile
-- `rcs-agent-onboarding` — the flow that creates and verifies an RBM agent on a Sender Profile
-- `messaging-performance-analyzer` — if profile state seems to correlate with delivery problems
+Sent exposes profile APIs and completion behavior, but your application may need richer internal states. Label them as application states so future agents do not mistake them for Sent enums.
+
+| Application state | Meaning | Exit condition |
+|---|---|---|
+| `draft` | Profile data is being collected. | Required identity and owner fields are present. |
+| `compliance_pending` | Brand/campaign/channel evidence is being prepared. | Required compliance resources exist or have been submitted. |
+| `completion_started` | `/v3/profiles/{profileId}/complete` returned accepted/started behavior. | Webhook/callback or follow-up status indicates completion result. |
+| `active` | Profile is approved for intended channels. | Traffic is allowed and test sends pass. |
+| `restricted` | One or more channels is blocked, paused, or missing approval. | Root cause resolved and profile retested. |
+| `retiring` | Sends are drained and webhooks/credentials are being removed. | No active sends, subscriptions, or credentials remain. |
+
+### 7. Plan tenant offboarding before the first send
+
+Offboarding is easiest when profile boundaries are clean. To retire a profile, stop new sends, drain in-flight messages, export relevant message/activity evidence, disable or reroute webhooks, revoke or rotate credentials, delete/soft-delete the profile when safe, and retain compliance records according to the customer’s policy.
+
+## Common rationalizations to avoid
+
+Do not use one profile for every tenant just because it is easy. Over-splitting creates unnecessary compliance and operational work.
+
+Do not use one shared profile for distinct recipient-visible brands. Under-splitting creates wrong-sender and compliance-contamination failures.
+
+Do not treat internal tenant ID as a substitute for Sender Profile ID. The application can map tenant ID to profile ID, but outbound sends and webhook reconciliation need Sent identifiers.
+
+Do not hardcode provider identifiers as routing keys before verifying Sent webhook payloads. Sent’s event shape is the integration contract.
+
+Do not rotate webhook secrets casually. Secret rotation immediately invalidates the old secret, so coordinate with the receiving endpoint.
+
+## Verification checklist
+
+- [ ] Each proposed profile has a recipient-visible rationale.
+- [ ] SMS, WhatsApp, and RCS readiness are tracked separately per profile.
+- [ ] US A2P SMS profiles have brand/campaign work routed to compliance before completion.
+- [ ] The implementation stores Sent profile IDs and any provider IDs as separate fields.
+- [ ] Profile creation/update/complete calls use idempotency keys where retries are possible.
+- [ ] Webhook routing is based on Sent event fields or a send-time Sent message ID mapping.
+- [ ] Application lifecycle states are not presented as Sent API enum values.
+- [ ] Offboarding drains sends, webhooks, credentials, and retained evidence.
+
+## Related skills
+
+Use `sent-skills:sms-10dlc-registration` when a profile needs US A2P SMS brand/campaign registration, opt-in review, or 10DLC troubleshooting.
+
+Use `sent-skills:waba-embedded-signup` when the architecture includes WhatsApp WABA/phone-number connection or Embedded Signup.
+
+Use `sent-skills:rcs-agent-onboarding` when the profile needs RCS approval, launch evidence, or fallback design.
+
+Use `sent-skills:template-builder-ui` when the architecture decision depends on reusable cross-channel template lifecycle.
+
+Use `sent-skills:messaging-performance-analyzer` after launch when webhook, delivery, or activity evidence shows a performance issue.
+
+## Suggested bundled references and scripts
+
+| File | Type | Purpose |
+|---|---|---|
+| `references/multi-tenancy-patterns.md` | Architecture reference | Keep detailed routing, rate-limit, idempotency, and offboarding patterns outside the skill body. |
+| `references/sender-profile-data-model.md` | Schema reference | Provide recommended application tables and mapping fields for Sent profile integrations. |
+| `references/profile-boundary-examples.md` | Worked examples | Show ISV, marketplace, multi-brand enterprise, and department-level profile splits. |
+| `scripts/audit_sender_profiles.py` | Validation script | Compare expected tenant/profile/channel mappings against exported Sent profile and webhook data. |
+
+## Unverified claims to confirm or remove
+
+- A strict one-API-key-per-profile model was not verified; use “profile-scoped credentials” unless confirmed.
+- Exact Sent webhook event payload routing fields were not verified in the extracted OpenAPI details.
+- Profile states such as `partially_active`, `restricted`, or `restoring` are application-level labels unless Sent returns them.
+- Provider-specific routing keys for WhatsApp/RCS/SMS should not be required unless observed in Sent event payloads or docs.

@@ -160,7 +160,6 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- Exact throughput limits, carrier caps, and vetting-score-to-throughput mapping were not verified in the extracted Sent docs/API.
-- Public API fields named `tcr_brand_id` or `tcr_campaign_id` were not verified; use Sent brand/campaign IDs and returned provider identifiers.
-- A rule that every sample message must contain opt-out text exactly was not verified; Sent requires opt-out instructions and sample messages.
-- Country-specific compliance, routing, and pricing claims require Sent compliance data or a current Sent source beyond this US 10DLC workflow.
+- Sent's `/v3/brands` and `/v3/brands/{id}/campaigns` endpoints exist; their internal mapping to TCR identifiers is opaque to the customer. Store the Sent brand and campaign IDs returned by the API — don't claim a public `tcr_brand_id` or `tcr_campaign_id` field unless an API response surfaces it.
+- Exact throughput limits, per-carrier caps, and vetting-score-to-throughput mapping are not in Sent's docs. The snapshot only confirms account-wide tier limits (Starter 60 msg/min, Growth 300 msg/min, Enterprise custom) — these are not TCR / carrier per-campaign throughput numbers.
+- Country-specific compliance, routing, and pricing claims beyond Sent's listed country-specific document requirements (AU, BE, PL, ZA, SE, TH, UK) require a current Sent source.

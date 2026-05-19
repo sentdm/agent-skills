@@ -1,6 +1,6 @@
 ---
 name: template-builder-ui
-description: Designs and audits a Sent template builder UI for cross-channel SMS, WhatsApp, and RCS templates, including component editing, variable samples, status handling, channel-specific validation, and submission workflows. Use when a user says template builder, template editor, Sent templates, WhatsApp template UI, RCS template, SMS template, Meta import, JSON template, approval status, or wants a product spec for template creation.
+description: Designs and audits a Sent template builder UI for cross-channel SMS, WhatsApp, and RCS templates, including component editing, variable samples, status handling, channel-specific validation, and submission workflows. Use when a user says template builder, template editor, Sent templates, WhatsApp template UI, RCS template, SMS template, Meta import, JSON template, approval status, or wants a product spec for template creation. Do not use for generic templating engines (Jinja, Handlebars, Mustache, email/HTML templates) or non-Sent template systems.
 ---
 
 <!--
@@ -153,6 +153,8 @@ Use `sent-skills:rcs-agent-onboarding` when RCS templates depend on agent approv
 Use `sent-skills:sender-profile-architect` when template ownership, profile scoping, or tenant boundaries are unclear.
 
 Use `sent-skills:messaging-performance-analyzer` when an approved template sends poorly or webhook evidence shows failures.
+
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Suggested bundled references and scripts
 

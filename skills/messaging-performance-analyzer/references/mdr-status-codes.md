@@ -1,130 +1,215 @@
-# MDR Status & Error Codes — Reference
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Error envelope and full error code catalog, Send-time error codes, Message lifecycle, Webhook payload format, Webhook model, Webhook event lifecycle) -->
 
-Supporting reference for `messaging-performance-analyzer`. Sent normalizes inbound delivery events from all three channels into a single MDR stream. This doc captures the codes you actually see in production analysis, grouped by channel and root cause.
+# MDR status & error codes — reference
 
-Authoritative upstream sources:
+Supporting reference for `messaging-performance-analyzer`. "MDR" is the human term for Sent's per-message status stream; the v3 surfaces are `GET /v3/messages/{id}` and `GET /v3/messages/{id}/activities`. The codes below are Sent's own normalized catalog as documented at docs.sent.dm — not raw provider codes.
+
+Authoritative upstream sources (for the downstream provider codes that may appear in `error.details` after Sent normalization):
 - WhatsApp: [Cloud API Error Codes](https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes)
-- SMS: TCR + carrier-specific reject reasons (T-Mobile, AT&T, Verizon — each carrier publishes its own list)
+- SMS: TCR + carrier-specific reject reasons (T-Mobile, AT&T, Verizon each publish their own list)
 - RCS: [RBM API errors](https://developers.google.com/business-communications/rcs-business-messaging/reference/rest)
 
-## Message Status Lifecycle (normalized)
+## Message status lifecycle
 
-Sent's MDR uses normalized status values across channels:
+Sent normalizes all channels into a single state machine. Only one terminal at a time; only the **latest** status per `message_id` is meaningful when computing funnel counts.
 
-| Status | Meaning | Channels |
+```
+QUEUED -> ROUTED -> SENT -> DELIVERED -> READ   (WhatsApp & RCS only)
+  |         |        |         |
+FAILED   FAILED   FAILED    FAILED
+```
+
+| Status | Meaning |
+|---|---|
+| `QUEUED` | Accepted by Sent, waiting to dispatch. |
+| `ROUTED` | Assigned to a carrier/provider path. |
+| `SENT` | Dispatched to the upstream provider (carrier / WhatsApp Cloud API / RBM). |
+| `DELIVERED` | Confirmed delivery to device. |
+| `READ` | Recipient opened. WhatsApp + RCS only — SMS has no equivalent. |
+| `FAILED` | Terminal failure; the per-message reason is in the `description` field. |
+| `RECEIVED` | Inbound message from end user. |
+
+A message can transition `SENT -> DELIVERED -> FAILED` (e.g. expired WhatsApp window, capability lost on RCS); count the latest status, not the journey.
+
+## Synchronous errors (HTTP response body)
+
+These come back in the `error.code` field of the `POST /v3/messages` (or other mutation) response envelope. They abort the request — no message rows are created for the affected recipients.
+
+### Authentication / account state
+
+| Code | HTTP | Meaning |
 |---|---|---|
-| `submitted` | Sent accepted the API call | all |
-| `sent` | Handed off to the upstream provider | all |
-| `delivered` | Recipient device acknowledged receipt | SMS (when DLR available), WhatsApp, RCS |
-| `read` | Recipient opened the message | WhatsApp (if read receipts on), RCS |
-| `failed` | Terminal failure; check the channel's error code | all |
-| `replied` | Recipient sent an inbound message in response | all |
+| `AUTH_001` | 401 | Missing `x-api-key` header. |
+| `AUTH_002` | 401 | Invalid / unrecognized API key. |
+| `AUTH_004` | 403 | User role lacks permission for this operation. |
+| `AUTH_005` | 403 | Account valid + setup complete but pending final activation by Sent. |
+| `AUTH_006` | 403 | KYC not complete. Account in `SIGNED_UP`, `KYC_STARTED`, `WHITELISTED`, `ONBOARDING_STARTED`, or `KYC_RESUBMISSION_REQUESTED`. |
+| `AUTH_007` | 403 | KYC done but no messaging channel configured. Account in `KYC_COMPLETED` or `MESSAGE_COMPLIANCE_COMPLETED`. |
 
-Only the **latest** status per message ID is meaningful when computing funnel counts. A message can go `sent → delivered → failed` (e.g. expired window on WhatsApp, capability lost on RCS) and should be counted as `failed`.
+Triage rule: if `AUTH_005/006/007` is producing all the failures, the fix is in onboarding, not messaging — escalate to `sent-skills:sender-profile-architect`.
 
-## SMS — Carrier Reject Reasons
+### Validation
 
-Carriers don't have a single shared error enum; each publishes its own. Sent normalizes the high-signal ones. The categories you'll see most:
-
-| Category | Typical Sent-normalized code or label | What it means |
+| Code | HTTP | Meaning |
 |---|---|---|
-| Carrier filter | `CARRIER_REJECT_T_MOBILE`, `CARRIER_REJECT_ATT`, etc. | The carrier blocked the message — usually a content / campaign-mismatch issue |
-| Throughput throttle | `THROUGHPUT_EXCEEDED` | TCR campaign TPS exceeded; pace sends |
-| Invalid destination | `INVALID_NUMBER`, `LANDLINE`, `UNKNOWN_SUBSCRIBER` | Number is not SMS-reachable |
-| Opt-out (STOP) | `OPT_OUT` | Recipient texted STOP; do not re-send |
-| Campaign suspended | `CAMPAIGN_SUSPENDED`, `BRAND_REJECTED` | TCR action on the campaign / brand; fix in onboarding |
-| No DLR | `NO_DELIVERY_RECEIPT` | Carrier didn't return a DLR; treat as "sent, unknown" |
+| `VALIDATION_001` | 400 | Generic request validation; `error.details` is `{field: [messages]}`. |
+| `VALIDATION_002` | 400 | Phone number not in E.164 (`+CCNNNNNNNNNN`). |
+| `VALIDATION_003` | 400 | UUID malformed. |
+| `VALIDATION_004` | 400 | Required field missing. |
+| `VALIDATION_005` | 400 | Value out of range (e.g. `retry_count` 1-5, `timeout_seconds` 5-120). |
+| `VALIDATION_006` | 400 | Invalid enum (case-sensitive). |
+| `VALIDATION_007` | 400 | `Idempotency-Key` violates format (`^[a-zA-Z0-9_-]{1,255}$`). |
 
-When triaging SMS:
-- Aggregate by carrier first — same content can pass on one network and fail on another.
-- Then aggregate by category. Carrier-filter spikes mean the campaign needs vetting work; opt-out spikes mean list hygiene.
+### Resource
 
-## WhatsApp — Meta Error Codes
-
-The full enum is on Meta's site; what follows is the working set you triage against in real analyses.
-
-### Authorization & Capability
-| Code | Meaning | What it usually means |
+| Code | HTTP | Meaning |
 |---|---|---|
-| `131000` | Generic | Check the `error_data.details` text |
-| `131005` | Access denied | App lost permission to the phone number; re-auth needed |
-| `131008` | Required parameter missing | Malformed request — client bug |
-| `131009` | Parameter value invalid | Phone number format, locale code, or template name wrong |
-| `131016` | Service unavailable | Meta-side outage; retry with backoff |
-| `131021` | Recipient cannot be sender | Don't message yourself |
+| `RESOURCE_001` | 404 | Contact not found. |
+| `RESOURCE_002` | 404 | Template not found. |
+| `RESOURCE_003` | 404 | Message not found. |
+| `RESOURCE_004` | 404 | Customer not found. |
+| `RESOURCE_005` | 404 | Organization not found. |
+| `RESOURCE_006` | 404 | User not found. |
+| `RESOURCE_007` | 409 | Resource already exists. |
+| `RESOURCE_008` | 404 | Webhook not found. |
 
-### Recipient Quality
-| Code | Meaning | What it usually means |
+### Business logic (most operationally interesting)
+
+| Code | HTTP | Meaning |
 |---|---|---|
-| `131026` | Message undeliverable | Recipient is not on WhatsApp, blocked your number, or the number is invalid |
-| `131047` | Re-engagement message | 24-hour customer service window expired; must send a template to reopen |
-| `131048` | Spam rate limit | Per-recipient or per-account quality has dropped; messages throttled |
+| `BUSINESS_001` | 422 | Cannot modify inherited contact (read-only from parent org / shared profile). |
+| `BUSINESS_002` | 429 | Rate limit exceeded. |
+| `BUSINESS_003` | 422 | Insufficient account balance. |
+| `BUSINESS_004` | 422 | All recipients have `opt_out=true` — the entire batch is rejected synchronously. |
+| `BUSINESS_005` | 422 | WhatsApp template not approved (still `PENDING` or `REJECTED`). |
+| `BUSINESS_006` | 422 | Message can only be modified in `QUEUED` or `ACCEPTED` state. |
+| `BUSINESS_007` | 422 | Channel not available for this contact (check the contact's `available_channels`). |
+| `BUSINESS_008` | 422 | Operation exceeds account quota. |
 
-### Rate Limit / Throughput
-| Code | Meaning | What it usually means |
+Note the per-message vs batch distinction: `BUSINESS_004` aborts the whole call. `ERR_CONSENT_BLOCKED` (below) is the per-recipient equivalent — same root cause, different surface.
+
+### Conflict / service / internal
+
+| Code | HTTP | Meaning |
 |---|---|---|
-| `130429` | Rate limit hit | Too many requests in a short window; back off |
-| `131056` | Pair rate-limit | Too many messages to the same recipient in a short window |
-| `133016` | Account daily messaging limit reached | Tier exhausted for the 24h period |
+| `CONFLICT_001` | 409 | Concurrent idempotent request in flight; retry after a short delay. |
+| `SERVICE_001` | 503 | Cache service unavailable. |
+| `INTERNAL_001` | 500 | Unexpected internal server error. |
+| `INTERNAL_002` | 500 | Database operation failed. |
+| `INTERNAL_003` | 502 | External SMS / WhatsApp / RCS provider error. |
+| `INTERNAL_004` | 504 | Internal timeout. |
+| `INTERNAL_005` | 503 | Service temporarily unavailable (maintenance / overload). |
 
-### Template / Content
-| Code | Meaning | What it usually means |
+If you see `INTERNAL_003` dominating a cohort, the upstream provider is the proximate cause — but Sent surfaces the failure synchronously, so it counts as a request-time error, not a per-message FAILED.
+
+## Send-time per-message errors
+
+These do **not** appear in the HTTP response. The request returns 202 with `QUEUED`; the message later transitions to `FAILED` and the code is exposed in the `description` field of:
+
+- `GET /v3/messages/{id}` when `status=FAILED`
+- `GET /v3/messages/{id}/activities` on the FAILED activity row
+- The `message.failed` webhook payload — but the webhook payload itself only carries `message_status=FAILED`, so you must fetch the message detail to see the code
+
+| Code | Meaning |
+|---|---|
+| `ERR_CONSENT_BLOCKED` | Per-recipient consent block: contact has `opt_out=true` or is on a phone-channel suppression list. No provider call, no charge. The per-recipient cousin of `BUSINESS_004`. |
+| `ERR_ROUTE_DENIED` | No active route could deliver to the requested channel/country combination. |
+| `ERR_TEMPLATE_PARAMS_INVALID` | Required template variables missing, or a variable failed regex/type validation. |
+
+A funnel where many messages reach `ROUTED` and then fail with `ERR_ROUTE_DENIED` is a routing-table / sender-profile problem, not a delivery problem. A spike in `ERR_TEMPLATE_PARAMS_INVALID` is a caller bug — hand off via `sent-skills:waba-template-author` or `sent-skills:template-builder-ui` to fix the call site.
+
+## Webhook payload shape
+
+The verified envelope is:
+
+```json
+{
+  "field": "message",
+  "sub_type": "message.delivered",
+  "timestamp": "2026-01-15T10:35:00+00:00",
+  "payload": {
+    "account_id": "<UUID>",
+    "message_id": "<UUID>",
+    "message_status": "DELIVERED",
+    "channel": "sms",
+    "inbound_number": "+1...",
+    "outbound_number": "+1...",
+    "template_id": "<UUID>"
+  }
+}
+```
+
+- Top-level shape is fixed: `field`, `sub_type`, `timestamp`, `payload`.
+- `sub_type` follows `<field>.<event>` (e.g. `message.queued`, `message.routed`, `message.sent`, `message.delivered`, `message.read`, `message.failed`).
+- The payload carries identifiers and status — **not** the failure description. For FAILED, fetch `GET /v3/messages/{message_id}` to read `description`.
+
+### Webhook health (config object)
+
+Use the webhook record itself to distinguish "delivery is broken" from "ingestion is broken":
+
+| Field | Meaning |
+|---|---|
+| `is_active` | Webhook accepts events. If false, nothing is fanned out. |
+| `last_delivery_attempt_at` | When Sent last attempted POST to the customer's endpoint. |
+| `last_successful_delivery_at` | When the customer's endpoint last returned 2xx. A growing gap between these two fields means the endpoint is failing, not the messages. |
+| `consecutive_failures` | A non-zero, monotonically rising value is the canonical "your endpoint is down" signal. |
+| `retry_count` | 1-5; default 3. |
+| `timeout_seconds` | 5-120; default 30. |
+| `event_types`, `event_filters` | Which events fan out. If `event_filters: {"message": ["delivered"]}` then `message.failed` will never reach the endpoint, which can read as "no failures" downstream. |
+
+## Webhook event lifecycle
+
+The verified per-message webhook sequence:
+
+1. `message.queued`
+2. `message.routed`
+3. `message.sent`
+4. `message.delivered`
+5. `message.read` (WhatsApp / RCS only)
+
+On failure at any stage: `message.failed` with `payload.message_status=FAILED`. The reason is in the message detail (`description`), not the webhook payload.
+
+## Provider-level codes (referential, not Sent-normalized)
+
+The codes below are downstream provider responses. They may appear inside Sent's `description` or `error.details` after the normalized Sent code, but they are **not** part of the Sent v3 enum.
+
+### WhatsApp — Meta error codes (illustrative)
+
+| Code | Meaning | Typical root cause |
 |---|---|---|
-| `131051` | Unsupported message type | Recipient's app version can't render this type |
-| `132000` | Template paused | Template exceeded the quality threshold |
-| `132001` | Template does not exist | Wrong template name or language combination |
-| `132005` | Template hydrated text too long | Body after variable substitution exceeded the 1024-char cap |
-| `132007` | Translated text too long | Same as above for a specific language variant |
+| `131005` | Access denied | App lost permission; re-auth via `sent-skills:waba-embedded-signup`. |
+| `131026` | Message undeliverable | Recipient not on WhatsApp / number invalid / blocked sender. |
+| `131047` | Re-engagement message | 24h customer-service window expired; must send a template. |
+| `131048` | Spam rate limit | Per-recipient or per-account quality dropped. |
+| `131056` | Pair rate-limit | Too many messages to same recipient in short window. |
+| `132000` | Template paused (Meta-side) | Template exceeded quality threshold. **Note:** Sent's own `templates.status` enum is `APPROVED` / `PENDING` / `REJECTED` only — there is no `PAUSED` in the Sent API surface; this code may still show up in the message `description`. |
+| `132001` | Template does not exist | Wrong template name / language. |
+| `133006` | Phone number not registered | Embedded Signup `/register` step skipped or failed. |
+| `133016` | Account daily messaging limit reached | Tier exhausted for the 24h period. |
 
-### Account Restriction
-| Code | Meaning | What it usually means |
-|---|---|---|
-| `133000` | Account is incomplete | Business not yet verified |
-| `133004` | Server temporarily unavailable | Meta-side; retry |
-| `133005` | Two-step PIN required | Phone number registration PIN missing or wrong |
-| `133006` | Phone number not registered | Step 7 of Embedded Signup (`/register`) was skipped or failed |
-| `133008` | Too many 2FA verification attempts | Rotate the PIN and re-register |
-| `133009` | Phone number deletion failed | Cleanup-time error; not delivery-related |
+### SMS — carrier reject categories (illustrative)
 
-## RCS — RBM Reject Reasons
+Carriers don't share an enum; the categories you actually need to triage on:
+- Carrier filter (per network — T-Mobile / AT&T / Verizon — same content can pass on one and fail on another)
+- Throughput throttle
+- Invalid / landline / unknown subscriber
+- Opt-out (STOP keyword)
+- Campaign suspended / brand rejected (TCR-side)
+- No DLR returned
 
-RCS funnel breakage tends to be more about capability than delivery. Common normalized buckets:
+### RCS — RBM reject categories (illustrative)
 
-| Category | Typical Sent-normalized code or label | What it means |
-|---|---|---|
-| Capability mismatch | `NOT_RCS_CAPABLE`, `CAPABILITY_REVOKED` | Handset isn't RCS-reachable; usually fall back to SMS |
-| Agent state | `AGENT_NOT_LAUNCHED`, `AGENT_SUSPENDED` | The RBM agent isn't approved in this carrier or has been suspended; sender-side fix |
-| Quota | `RCS_QPS_EXCEEDED` | Pace sends |
-| Content rejected | `RICH_CARD_INVALID`, `SUGGESTION_INVALID` | Payload didn't meet RBM schema; client bug |
-| Suggestion timeout | `SUGGESTION_TIMEOUT` | User didn't tap within the suggestion lifetime; usually a UX signal, not a failure |
-| No DLR | `NO_DELIVERY_RECEIPT` | Carrier didn't surface delivery; treat as "sent, unknown" |
+- Capability mismatch (not RCS-capable, capability revoked)
+- Agent state (not launched in this carrier, suspended)
+- Quota / QPS
+- Content rejected (rich card schema invalid, suggestion invalid)
+- Suggestion timeout (UX signal, not a failure)
+- No DLR returned
 
-When triaging RCS:
-- Always separate the capability check from delivery. Most "RCS is broken" reports are really "the audience isn't RCS-capable."
-- If a Sender Profile uses SMS fallback, report the fallback volume next to the RCS funnel — never inside it.
+## Counting rules
 
-## Interpreting the Funnel Through Codes
-
-A common production diagnosis flow:
-
-1. Compute funnel for a cohort (channel × template-or-campaign × country × tenant × week).
-2. Identify the broken stage.
-3. Pull the top error codes at that stage:
-   - **SMS** carrier-filter spike → campaign content / vetting score; fix at TCR level
-   - **SMS** invalid-number dominance → contact-list hygiene problem
-   - **WhatsApp** `131026` dominant → contact-list quality problem (fix in onboarding)
-   - **WhatsApp** `131047` dominant → conversation-window expiry; send a re-engagement template
-   - **WhatsApp** `131048` dominant → quality rating dropped; investigate template content or send-frequency
-   - **WhatsApp** `132000` / `132001` → template lifecycle issue (paused or deleted)
-   - **WhatsApp** `133016` → tier exhausted; either upgrade tier or re-pace sends
-   - **WhatsApp** `131005` / `133005` / `133006` → Sender Profile state issue (re-auth or re-register)
-   - **RCS** `NOT_RCS_CAPABLE` dominant → audience targeting; consider SMS-first for this segment
-   - **RCS** `AGENT_NOT_LAUNCHED` in one carrier → re-engage Google verification for that carrier
-
-## Counting Rules
-
-- **Use distinct message IDs** (`carrier_message_id` for SMS, `wamid` for WhatsApp, `messageId` for RCS) when computing rates; the same ID can have multiple webhook events.
-- **Use the latest status** (`max(timestamp)`) — a `failed` after `delivered` means failed; a `read` after `delivered` means read.
-- **Exclude pending** (no `delivered` and no `failed` after the analysis window closes) from rate denominators — they're indeterminate.
-- **Honor a minimum cohort size** before drawing conclusions about rate shifts under a few percentage points. Sent's internal heuristic is ≥1,000 messages per cohort; below that, the noise dominates.
-- **Separate RCS fallback volume.** If a Sender Profile falls back to SMS, the SMS messages it generated are *not* RCS delivery; account for them in the SMS funnel.
+- **Use Sent `message_id`** as the primary unit. Provider IDs (carrier message IDs, `wamid`, RBM `messageId`) are useful for escalation but are **not** in the v3 docs as join keys.
+- **Use the latest status** (`max(timestamp)`) — a `FAILED` after `DELIVERED` means `FAILED`; a `READ` after `DELIVERED` means `READ`.
+- **Exclude pending** (`QUEUED`/`ROUTED`/`SENT` with no terminal status after the analysis window closes) from rate denominators — they're indeterminate.
+- **Separate channel fan-out.** `POST /v3/messages` with `"channel": ["sms","whatsapp","rcs"]` creates one message per channel; each has its own `message_id` and its own lifecycle. Don't double-count at the recipient level unless the user explicitly asks for recipient-level rollup.
+- **Honor a minimum cohort size** before drawing conclusions about small rate shifts. A working heuristic is ≥1,000 messages per cohort; below that, noise dominates. This is an analyst rule of thumb, not a Sent API rule.

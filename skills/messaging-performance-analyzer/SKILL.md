@@ -4,14 +4,11 @@ description: Analyzes Sent message delivery, webhook, and activity data to expla
 ---
 
 <!--
-Verified against Sent sources:
-- https://docs.sent.dm/start/quickstart/first-message
-- https://docs.sent.dm/reference/api
-- Sent v3 OpenAPI: POST /v3/messages, GET /v3/messages/{id}, GET /v3/messages/{id}/activities, /v3/webhooks, /v3/webhooks/event-types, /v3/webhooks/{id}/events, /v3/webhooks/{id}/test
+Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Message lifecycle, Error envelope and full error code catalog, Send-time error codes, Webhook payload format, Webhook model, Webhook event lifecycle).
 
-Review notes:
-- Sent docs verify the lifecycle QUEUED → ROUTED → SENT → DELIVERED, with READ for WhatsApp and RCS.
-- Treat provider-level error-code dictionaries and MDR-normalized buckets as reference material unless the specific field appears in Sent message, activity, webhook, or exported log data.
+- "MDR" is the human term for the Sent activities surface: GET /v3/messages/{id}/activities. There is no separate MDR endpoint.
+- Lifecycle: QUEUED -> ROUTED -> SENT -> DELIVERED -> READ (WhatsApp/RCS only), with FAILED at any stage and RECEIVED for inbound.
+- Sent exposes its own normalized error codes (AUTH_*, VALIDATION_*, RESOURCE_*, BUSINESS_*, CONFLICT_001, SERVICE_001, INTERNAL_*) on the HTTP envelope, plus send-time per-message codes (ERR_CONSENT_BLOCKED, ERR_ROUTE_DENIED, ERR_TEMPLATE_PARAMS_INVALID) on the message `description` field. See references/mdr-status-codes.md.
 -->
 
 # Messaging performance analyzer
@@ -137,13 +134,11 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 |---|---|---|
 | `references/mdr-status-codes.md` | Lookup table | Normalize observed SMS, WhatsApp, and RCS provider errors without putting long code dictionaries in the skill body. |
 | `references/performance-diagnosis-playbook.md` | Worked examples | Decision tree for which signal to investigate first, channel-specific diagnostic patterns, cross-skill handoff matrix, and escalation criteria. |
-| `scripts/analyze_mdr_funnel.py` | Validation script | Reads an MDR export (CSV or JSON), prints per-stage counts and drop-off percentages, exits non-zero on anomalies. Run: `python skills/messaging-performance-analyzer/scripts/analyze_mdr_funnel.py path/to/mdr.csv` (use `--threshold N` to tune; default 20). |
+| `scripts/analyze_mdr_funnel.py` | Validation script | Reads an MDR export (CSV or JSON), prints per-stage counts and drop-off percentages, exits non-zero on anomalies. Run: `python skills/messaging-performance-analyzer/scripts/analyze_mdr_funnel.py path/to/mdr.csv` (use `--threshold N` to tune, default 20; pass `--show-errors` to also tally `ERR_*` codes parsed from FAILED message `description` fields). |
 | `scripts/fixtures/good.json` | Fixture | Synthetic healthy-funnel MDR export. |
 | `scripts/fixtures/bad.json` | Fixture | Synthetic MDR export with deliberate >50% SENT→DELIVERED drop. |
 
 ## Unverified claims to confirm or remove
 
-- The term “MDR” as a public Sent v3 API object or endpoint was not verified in the extracted Sent v3 API reference.
-- Exact normalized provider error buckets such as `CARRIER_REJECT_*`, `RCS_QPS_EXCEEDED`, or WhatsApp numeric-code groupings are reference/internal taxonomy unless those exact fields appear in the customer’s Sent activity or webhook payloads.
-- Any fixed cohort-size threshold such as “1,000 messages minimum” is an analysis heuristic, not a documented Sent API rule.
-- Provider identifiers such as carrier message IDs, `wamid`, or RCS message IDs should not be required unless Sent activity/webhook payloads expose them for the relevant account.
+- Any fixed cohort-size threshold such as “1,000 messages minimum” is an analyst heuristic, not a documented Sent API rule.
+- External provider identifiers such as carrier message IDs, WhatsApp `wamid`, and RCS message IDs are not in the v3 docs as join keys; use Sent `message_id` and treat provider IDs as escalation-only context.

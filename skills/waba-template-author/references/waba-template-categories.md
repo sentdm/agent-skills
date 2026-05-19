@@ -1,13 +1,36 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Template model, Business logic error codes) -->
+
 # WABA Template Categories — Reference
 
 Supporting reference for `waba-template-author`. Excerpts from Meta's template
-policy plus practical mappings to common use cases. Authoritative source:
-[WhatsApp Business Platform > Message Templates](https://developers.facebook.com/docs/whatsapp/message-templates).
+policy plus practical mappings to common use cases. Authoritative external
+source: [WhatsApp Business Platform > Message Templates](https://developers.facebook.com/docs/whatsapp/message-templates).
 
 > The Meta policy evolves frequently — verify the current rules in the official
 > docs before relying on edge cases. This reference captures the stable patterns
 > and boundaries; assume any specific number or category boundary may have
 > changed since this file was written.
+
+## Sent's Template Categories and Statuses
+
+Sent surfaces exactly **three** categories — Meta's three, no others:
+
+- `UTILITY`
+- `MARKETING`
+- `AUTHENTICATION`
+
+Sent's template `status` set is exactly:
+
+- `APPROVED`
+- `PENDING`
+- `REJECTED`
+
+**There is no `PAUSED` status in Sent.** Meta may internally pause a template
+after delivery starts (quality rating drop, opt-out spike), but Sent does **not**
+surface PAUSED — the Sent template status remains whatever it was (typically
+`APPROVED`), while sends against the paused template start failing at send time.
+Detect that via failed activities / message webhooks, not via the template
+status. See `template-rejection-playbook.md` for the workflow.
 
 ## The Three Categories
 
@@ -65,10 +88,9 @@ verification, account-recovery codes.
 ## Component Rules
 
 ### Header (optional)
-- Type: `TEXT` | `IMAGE` | `VIDEO` | `DOCUMENT` | `LOCATION`
+- Sent header `type`: `TEXT` | `IMAGE` | `VIDEO` | `DOCUMENT` (no `LOCATION` at the Sent layer)
 - Text: max 60 chars, max 1 variable
 - Media: provide a sample URL or media handle at submission
-- Location: lat/long pair for sample, structured location at send time
 
 ### Body (required)
 - Max 1024 chars
@@ -88,44 +110,82 @@ verification, account-recovery codes.
   - URL CTAs may include one trailing variable: `https://example.com/orders/{{1}}`
   - URL CTAs require an example URL for submission
 
-## Submission Payload Shape (Cloud API)
+## Sent CreateTemplateRequest Shape
 
-```json
-POST /v23.0/{waba_id}/message_templates
+Sent's `POST /v3/templates` accepts the following structured shape (from
+`references/_inputs/sent-docs-v3-2026-05-19.md`, Template Models section):
+
+```
 {
-  "name": "order_confirmation_v1",
-  "language": "en_US",
-  "category": "UTILITY",
-  "components": [
+  name,
+  category,                    // "UTILITY" | "MARKETING" | "AUTHENTICATION"
+  language,                    // BCP-47 with underscore, e.g. "en_US"
+  body: {
+    content,                   // body text with {{1}}, {{2}} placeholders
+    variables?: [
+      { name, type: "text" | "number" | "date", example? }
+    ]
+  },
+  header?: {
+    type: "TEXT" | "IMAGE" | "VIDEO" | "DOCUMENT",
+    content
+  },
+  footer?: { content },
+  buttons?: [
     {
-      "type": "HEADER",
-      "format": "TEXT",
-      "text": "Order #{{1}} confirmed",
-      "example": { "header_text": ["A1029"] }
-    },
-    {
-      "type": "BODY",
-      "text": "Hi {{1}}, your order #{{2}} has been confirmed and will ship soon. Track it any time below.",
-      "example": { "body_text": [["John", "A1029"]] }
-    },
-    {
-      "type": "FOOTER",
-      "text": "Reply STOP to unsubscribe."
-    },
-    {
-      "type": "BUTTONS",
-      "buttons": [
-        {
-          "type": "URL",
-          "text": "Track order",
-          "url": "https://example.com/orders/{{1}}",
-          "example": ["https://example.com/orders/A1029"]
-        }
-      ]
+      type: "QUICK_REPLY" | "URL" | "PHONE_NUMBER",
+      text,
+      url?,                    // required when type = URL
+      phone_number?            // required when type = PHONE_NUMBER
     }
-  ]
+  ],
+  channels?,                   // subset of ["sms", "whatsapp", "rcs"]
+  sandbox?                     // bool
 }
 ```
+
+Worked Sent request:
+
+```json
+{
+  "name": "order_confirmation_v1",
+  "category": "UTILITY",
+  "language": "en_US",
+  "body": {
+    "content": "Hi {{1}}, your order #{{2}} has been confirmed and will ship soon. Track it any time below.",
+    "variables": [
+      { "name": "first_name", "type": "text", "example": "Jordan" },
+      { "name": "order_id",   "type": "text", "example": "A1029" }
+    ]
+  },
+  "header": { "type": "TEXT", "content": "Order #{{1}} confirmed" },
+  "footer": { "content": "Reply STOP to unsubscribe." },
+  "buttons": [
+    {
+      "type": "URL",
+      "text": "Track order",
+      "url": "https://example.com/orders/{{1}}"
+    }
+  ],
+  "channels": ["whatsapp"],
+  "sandbox": false
+}
+```
+
+Notes:
+
+- The Sent body is `body.content`, not `text` (Meta-side Cloud API uses `text`
+  on the BODY component). Variable samples live in `body.variables[].example`
+  rather than a separate Cloud API `example.body_text` block.
+- `header.type` is restricted to **TEXT, IMAGE, VIDEO, DOCUMENT** at the Sent
+  layer. `LOCATION` is not a Sent header type.
+- `buttons[].type` is restricted to **QUICK_REPLY, URL, PHONE_NUMBER** at the
+  Sent layer. Authentication-only Cloud API button types (`OTP`, `COPY_CODE`,
+  `AUTOFILL`) are Meta-side and are not Sent button types.
+- `channels` accepts a subset of `["sms", "whatsapp", "rcs"]`. WhatsApp templates
+  always include `"whatsapp"`.
+- `language` follows BCP-47 with the underscore separator (`en_US`, `pt_BR`,
+  `es_MX`). Not `en`, not `en-US`.
 
 ## Common Rejection Reasons (from Meta's API)
 

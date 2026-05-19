@@ -1,12 +1,41 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Template model, Business logic error codes, Send-time error codes) -->
+
 # Template Rejection Playbook — Reference
 
 What to do when Meta rejects a WhatsApp template, silently re-categorizes it,
 or pauses it after delivery starts. Companion to `waba-template-categories.md`
-and `waba-template-examples.md`. Authoritative source for codes is the official
-[Cloud API template docs](https://developers.facebook.com/docs/whatsapp/message-templates).
+and `waba-template-examples.md`. Authoritative source for Meta-side codes is
+the official [Cloud API template docs](https://developers.facebook.com/docs/whatsapp/message-templates).
+Sent-surfaced statuses and codes come from the Sent docs snapshot referenced
+above.
 
 Every entry: what triggers it, how to detect it from the rejection / status
 payload, and what to change before resubmitting.
+
+## Sent-surfaced template states (not Meta's)
+
+Sent's template `status` set is exactly `APPROVED`, `PENDING`, `REJECTED` —
+**no `PAUSED`**. When Meta pauses a template (quality rating drop, opt-out
+spike), Sent's template status does **not** change; it stays whatever it was
+(typically `APPROVED`). Sends against a Meta-paused template start failing
+asynchronously — surface that via the `message.failed` webhook or the
+`GET /v3/messages/{id}/activities` endpoint, not via a template-status poll.
+
+When a send is attempted against a Sent template whose `status` is `PENDING`
+or `REJECTED`, the batch is rejected synchronously with:
+
+| Code | HTTP | Meaning |
+|---|---|---|
+| `BUSINESS_005` | 422 | "WhatsApp template not approved (still PENDING / REJECTED)" |
+
+So the two failure modes are distinct:
+
+- Template never reached `APPROVED` in Sent → `BUSINESS_005` on send.
+- Template is `APPROVED` in Sent but Meta-paused → per-message failure on the
+  webhook / activities feed; the template `status` you see in Sent is unchanged.
+
+For diagnosing post-approval send failures, hand off to
+`sent-skills:messaging-performance-analyzer`.
 
 ## Category mismatch (utility classified, marketing content)
 
@@ -132,8 +161,11 @@ values that match.
   still in any state other than `DELETED`.
 - **Wait for review before re-resubmitting.** Spamming submissions of the
   same template body slows the queue for the WABA.
-- **For PAUSED templates,** revise the content (don't just wait) — Meta
-  paused for a reason and an untouched resubmission lands in the same place.
+- **For Meta-paused templates** (Sent template status still `APPROVED` but
+  sends are failing on the webhook / activities feed), revise the content
+  before resubmitting under a new version — Meta paused for a reason and an
+  untouched resubmission lands in the same place. Confirm the failures via
+  `sent-skills:messaging-performance-analyzer` before rewriting.
 - **For silent re-categorization,** resubmit the *strictest* version of the
   wording even if you intend to send marketing content from it — once the
   category is set, marketing-priced sends still work fine under a stricter
@@ -148,4 +180,5 @@ values that match.
 | `TAG_CONTENT_MISMATCH` | Variables vs. samples count mismatch | Provide one sample per `{{n}}` in the right shape |
 | `META_POLICY_VIOLATION` | Restricted content (alcohol, finance, etc.) | Check Meta's restricted-content policy for the WABA's vertical |
 | `INVALID_LANGUAGE` | Bad locale code | Use BCP-47 with underscore |
-| Approved then PAUSED | Quality rating dropped post-send | Revise wording, slow down sends, address opt-out rate |
+| Sends fail with `BUSINESS_005` | Sent template still `PENDING` or `REJECTED` | Wait for Sent approval, or fix the rejection and resubmit as `_v2` |
+| Sends fail post-approval (per-message failures, Sent status unchanged) | Meta-paused template (PAUSED is Meta-side, not reflected in Sent) | Diagnose via `sent-skills:messaging-performance-analyzer`; revise wording and resubmit `_v2` |

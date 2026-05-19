@@ -9,7 +9,7 @@ Exits non-zero and prints each issue with the offending field on failure.
 
 Checks performed:
   * Required top-level keys: name, language, category, components.
-  * category is one of UTILITY, MARKETING, AUTHENTICATION.
+  * category is one of UTILITY, MARKETING, AUTHENTICATION (Sent's three).
   * language matches BCP-47 (lowercase locale, optional uppercase region: en, en_US).
   * Exactly one BODY component is present with non-empty text
     (AUTHENTICATION templates are exempt — they use managed body content).
@@ -19,8 +19,14 @@ Checks performed:
       - Promotional phrases ("buy now", "limited time", "special offer",
         "discount", "sale", "free shipping") trigger warnings.
       - "click here to purchase" triggers a hard failure (clear cross-sell).
+  * HEADER component (if present): `format` must be one of TEXT, IMAGE, VIDEO,
+    DOCUMENT (Sent's allowed CreateTemplateRequest header types).
   * BUTTONS component (if present) is either <=3 QUICK_REPLY OR <=2 CTA
-    (URL/PHONE_NUMBER/OTP) — never mixed.
+    (URL/PHONE_NUMBER/OTP) — never mixed. Per-button checks:
+      - type must be one of QUICK_REPLY, URL, PHONE_NUMBER (Sent's button
+        enum) or OTP (Cloud API authentication-only, warned).
+      - URL buttons require a non-empty `url` field.
+      - PHONE_NUMBER buttons require a non-empty `phone_number` field.
 """
 
 from __future__ import annotations
@@ -48,6 +54,10 @@ PROMO_FAIL_PHRASES = ("click here to purchase",)
 
 CTA_BUTTON_TYPES = {"URL", "PHONE_NUMBER", "OTP"}
 QUICK_REPLY_TYPE = "QUICK_REPLY"
+
+# Sent CreateTemplateRequest enums (snapshot Template Models section).
+SENT_HEADER_TYPES = {"TEXT", "IMAGE", "VIDEO", "DOCUMENT"}
+SENT_BUTTON_TYPES = {"QUICK_REPLY", "URL", "PHONE_NUMBER"}
 
 
 class LintResult:
@@ -205,6 +215,33 @@ def _check_utility_promo(payload: dict[str, Any], result: LintResult) -> None:
             )
 
 
+def _check_header(payload: dict[str, Any], result: LintResult) -> None:
+    components = payload.get("components")
+    if not isinstance(components, list):
+        return
+    headers = _components_by_type(components).get("HEADER", [])
+    if not headers:
+        return
+    header = headers[0]
+    # In the Cloud API shape used by these fixtures, HEADER type discriminator
+    # is `format`; in Sent's shape it would be `type`. Accept either.
+    fmt = header.get("format")
+    if fmt is None:
+        fmt = header.get("type")
+    if not isinstance(fmt, str):
+        result.error(
+            "components[HEADER].format",
+            "HEADER component requires a 'format' (TEXT/IMAGE/VIDEO/DOCUMENT)",
+        )
+        return
+    if fmt.upper() not in SENT_HEADER_TYPES:
+        result.error(
+            "components[HEADER].format",
+            f"header format '{fmt}' must be one of {sorted(SENT_HEADER_TYPES)} "
+            "(Sent CreateTemplateRequest enum)",
+        )
+
+
 def _check_buttons(payload: dict[str, Any], result: LintResult) -> None:
     components = payload.get("components")
     if not isinstance(components, list):
@@ -222,7 +259,41 @@ def _check_buttons(payload: dict[str, Any], result: LintResult) -> None:
         if not isinstance(t, str):
             result.error(f"components[BUTTONS].buttons[{i}].type", "button type missing")
             continue
-        types.append(t.upper())
+        upper = t.upper()
+        types.append(upper)
+
+        # Sent's button type enum is QUICK_REPLY|URL|PHONE_NUMBER. Cloud-API OTP
+        # buttons (auth-only) are surfaced as a warning rather than a hard fail
+        # because Cloud-API-shaped fixtures use them; they are not part of the
+        # Sent CreateTemplateRequest button enum.
+        if upper not in SENT_BUTTON_TYPES and upper != "OTP":
+            result.error(
+                f"components[BUTTONS].buttons[{i}].type",
+                f"button type '{t}' must be one of {sorted(SENT_BUTTON_TYPES)} "
+                "(Sent CreateTemplateRequest enum)",
+            )
+            continue
+        if upper == "OTP":
+            result.warn(
+                f"components[BUTTONS].buttons[{i}].type",
+                "'OTP' is a Cloud-API auth-only button type; not part of Sent's "
+                "button enum (QUICK_REPLY/URL/PHONE_NUMBER)",
+            )
+
+        if upper == "URL":
+            url = b.get("url")
+            if not isinstance(url, str) or not url.strip():
+                result.error(
+                    f"components[BUTTONS].buttons[{i}].url",
+                    "URL buttons require a non-empty 'url' field",
+                )
+        if upper == "PHONE_NUMBER":
+            phone = b.get("phone_number")
+            if not isinstance(phone, str) or not phone.strip():
+                result.error(
+                    f"components[BUTTONS].buttons[{i}].phone_number",
+                    "PHONE_NUMBER buttons require a non-empty 'phone_number' field",
+                )
 
     quick = sum(1 for t in types if t == QUICK_REPLY_TYPE)
     cta = sum(1 for t in types if t in CTA_BUTTON_TYPES)
@@ -252,6 +323,7 @@ def lint_template(payload: Any) -> LintResult:
     _check_top_level(payload, result)
     _check_body(payload, result)
     _check_utility_promo(payload, result)
+    _check_header(payload, result)
     _check_buttons(payload, result)
     return result
 

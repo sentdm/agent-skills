@@ -231,3 +231,10 @@ A complete Embedded Signup integration should:
 
 - `sender-profile-architect` — what to do with the WABA and phone numbers once signup succeeds
 - `waba-template-author` — the first thing tenants do after connecting is submit templates
+- See top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## References
+
+- `references/waba-embedded-signup-spec.md` — exact field names, payloads, and Graph API endpoints
+- `references/waba-onboarding-runbook.md` — time-ordered operator runbook from pre-flight through first test send
+- `references/whatsapp-sender-profile-mapping.md` — how Meta-side entities map to Sent Sender Profiles

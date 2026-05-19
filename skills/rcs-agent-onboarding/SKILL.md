@@ -151,7 +151,6 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- Google RBM lifecycle states such as `pending_verification`, `launch_review`, or per-carrier launched states were not verified in Sent docs.
-- A public Sent `fallback_policy` field was not verified; use documented channel arrays unless confirmed.
-- Sent-exposed RCS `agentId`, rollout-status fields, or capability-check endpoints were not verified in the Sent v3 OpenAPI extraction.
+- Google RBM lifecycle states such as `pending_verification`, `launch_review`, or per-carrier launched states were not verified in Sent docs (these are Google-side, not exposed by Sent v3).
+- Sent does not expose RCS rollout-status or capability-check endpoints in v3; use Activities + webhook events to observe behavior.
 - Exact rich-card capability differences by carrier/device require external RBM evidence or live testing, not Sent docs alone.

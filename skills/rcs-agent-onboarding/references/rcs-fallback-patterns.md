@@ -1,86 +1,138 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: "Channel selection (POST /v3/messages)", "Webhook event lifecycle (verified from quickstart)", "Webhook payload format", "Send-time error codes", "RCS specifics (Sent-confirmed)", "What is NOT in v3 docs") -->
+
 # RCS Fallback Patterns — Reference
 
-Supporting reference for `rcs-agent-onboarding`. Covers when SMS fallback fires from an RBM send, how to declare channel arrays on Sent, content-trimming considerations, lower-environment testing, and the webhook signals that confirm fallback occurred. The RBM error semantics themselves are documented at [Google's RBM error reference](https://developers.google.com/business-communications/rcs-business-messaging/reference/rest) — this doc covers Sent's wrapping behavior.
+Supporting reference for `rcs-agent-onboarding`. Covers how Sent expresses RCS-to-SMS fallback (the `channel` array on the send request), what the documented webhook events tell you, and where the boundary sits between Sent-verified behavior and Google RBM-side semantics.
 
-## When Fallback Fires
+External error semantics live at [Google's RBM error reference](https://developers.google.com/business-communications/rcs-business-messaging/reference/rest) — this doc only covers Sent's wrapping.
 
-Sent's fallback engine triggers an alternate channel send when **any** of the following happens on the RCS attempt:
+## How fallback is expressed (verified)
 
-1. **Capability mismatch.** RBM responds with a `CAPABILITY_DENIED` (or equivalent) because the recipient's handset doesn't support a capability the message requires (e.g., carousel sent to a device that only renders text RCS).
-2. **Agent unverified for recipient's carrier.** The agent is `launched` overall but the recipient's carrier is still `PENDING`. RBM accepts the send but it never delivers; Sent's per-carrier reconciliation flags it as fallback-eligible.
-3. **Recipient device doesn't render RCS at all.** Older Android handsets, certain MVNO SIMs, or iOS devices on releases predating RCS support. RBM's capability endpoint returns `NOT_RCS_CAPABLE`.
-4. **Soft RBM outage.** Rare, but if RBM is unreachable beyond Sent's retry budget, the fallback channel is attempted as a last resort. Configurable per Sender Profile.
+Sent does **not** expose a separate `fallback_policy` field in v3. Fallback intent is expressed entirely by the ordered `channel` array on `POST /v3/messages`:
 
-Important: fallback is **per recipient per send**, not per Sender Profile. The same Sender Profile may deliver RCS to one recipient and SMS to another on the same campaign.
-
-## Declaring Channels on Sent
-
-Channels are declared on the send request as an ordered array. First channel listed is preferred; later channels are fallback targets.
-
-```
-channels: ["rcs", "sms"]
+```json
+{
+  "to": ["+15551234567"],
+  "channel": ["rcs", "sms"],
+  "template": { "id": "template_uuid" }
+}
 ```
 
 | Array | Behavior |
 |---|---|
-| `["rcs"]` | RCS-only. RBM errors surface to the application; nothing else attempted. |
-| `["rcs", "sms"]` | Default for transactional/notification traffic. SMS attempted if RCS can't deliver. |
-| `["rcs", "whatsapp", "sms"]` | RCS → WhatsApp → SMS waterfall. Requires the Sender Profile to have all three senders attached and the WhatsApp template pre-approved. |
+| `["rcs"]` | RCS-only. If RCS can't deliver, the message fails. No SMS attempt. |
+| `["rcs", "sms"]` | Documented fallback pattern. SMS is the explicit fallback target. |
+| `["sms", "whatsapp", "rcs"]` | Per the v3 docs, an array with multiple channels creates **one message per channel** — all dispatch. This is a multi-channel broadcast, not a waterfall. |
 | `["sms"]` | SMS-only. Used during agent provisioning before RCS is live. |
+| (omitted) | Sent picks the optimal channel automatically based on the recipient's `available_channels`. |
 
-The Sender Profile's `fallback_policy` (`sms`, `none`, `application-routed`) acts as the **default** for sends that don't pass an explicit `channels` array. An explicit array on the send request always wins.
+Two things worth surfacing to a customer:
 
-## Content Trimming on Fallback
+1. **Multi-channel arrays are broadcast, not waterfall.** The v3 docs describe `["sms", "whatsapp", "rcs"]` as producing one message per channel that all dispatch. If you want a strict RCS-first-with-SMS-fallback waterfall, the documented shape is `["rcs", "sms"]`. Anything longer needs explicit confirmation with Sent.
+2. **No `fallback_policy` field exists in v3.** Documentation, dashboards, or examples that reference one are inferring a v2 concept. Use the channel array.
 
-When a message authored for RCS falls back to SMS, the rich elements have to go somewhere or get dropped. Sent's default trimming behavior:
+## When fallback fires (inferred — confirm before promising)
 
-| RCS element | What happens on SMS fallback |
-|---|---|
-| Plain text body | Carried through; counted toward segment limits |
-| Suggested reply chips | Dropped silently (no SMS equivalent) |
-| Suggested action: open URL | URL appended to body if not already present |
-| Suggested action: dial / location / calendar | Dropped (or substituted with text URL where possible) |
-| Rich card (text + media + actions) | Card text rendered as message body; media link appended if media is web-accessible; actions dropped or appended as URL |
-| Rich card carousel | First card only — rest dropped |
-| Attachments | Replaced with a short URL to the asset if it's hosted publicly; otherwise dropped |
+Sent's docs verify that RCS "falls back to SMS automatically for non-RCS-capable recipients" and that `["rcs", "sms"]` makes that explicit. The docs do **not** enumerate every trigger condition (capability mismatch vs. carrier-pending vs. RBM outage). Treat the following as inferred and confirm with Sent if a customer needs exact semantics:
 
-Implications worth surfacing to tenants:
+- Recipient device not RCS-capable
+- Recipient on a carrier where the RCS Agent is not yet rolled out
+- RBM transient unreachability
 
-- **Segment cost.** An RCS message under 1000 chars is one billable RCS message. After trimming, the SMS fallback may span 3-7 SMS segments, billed per segment.
-- **Link loss.** Suggested actions that aren't URLs (dial, location) silently disappear. If the action is load-bearing, write the SMS variant explicitly rather than relying on auto-trim.
-- **Brand erosion.** Recipients see a rich card from your brand on RCS and a plain text block on SMS. Use a deliberate SMS-side template rather than auto-trim when brand consistency matters.
+For day-to-day customer guidance, "if RCS can't deliver, SMS is attempted" is the documented promise. The why-it-fell-back detail surfaces in the message's failure description (see below).
 
-For tenants where this matters, the cleanest pattern is to author both variants explicitly and let Sent pick based on channel — see `template-builder-ui` for the authoring surface.
+## Content trimming on fallback (external)
 
-## Testing Fallback in Lower Environments
+The v3 docs don't specify what happens to rich content (Rich Cards, Carousel Cards, Suggestion Chips) when a message authored for RCS falls back to SMS. SMS has no equivalent for any of those components.
 
-Sent provides three knobs in non-prod:
+The safe default is to **author SMS-side content explicitly** rather than rely on automatic trimming. The `template-builder-ui` skill covers the dual-authoring workflow.
 
-1. **Forced fallback flag** on the send request (`force_fallback: "capability_mismatch"`) — Sent skips the RCS attempt and goes straight to the next channel. Use to verify SMS-side behavior end to end.
-2. **Test recipient registry** — pre-register specific phone numbers as "RCS-incapable" in lower envs. RBM probes for these numbers return `NOT_RCS_CAPABLE` in Sent's test stubs.
-3. **Per-carrier launch state override** — toggle a specific carrier to `PENDING` on the RCS sender record in lower envs to exercise the per-carrier-pending fallback path.
+If a customer needs an exact answer about Sent's trimming behavior, escalate to `support@sent.dm` — it's not in v3 docs.
 
-Never use force-fallback flags in production. They're rejected at the API layer.
+## Verified webhook events for message lifecycle
 
-## Instrumentation — Confirming Fallback Occurred
-
-Sent emits the following webhook events around fallback (see [Sent webhook docs](https://docs.sent.dm/webhooks) for the full schema):
+Sent's quickstart docs verify this lifecycle. Sub-types follow `message.<event>`:
 
 | Event | Meaning |
 |---|---|
-| `message.channel_selected` | Fires when Sent decides which channel to use first. `channel` field carries the choice. |
-| `message.fallback_triggered` | Fires when the primary channel fails and Sent moves to the next. `reason` carries the trigger (`capability_mismatch`, `carrier_pending`, `not_rcs_capable`, `rbm_unreachable`). |
-| `message.delivered` | Fires when *any* channel successfully delivers. `channel` field tells you which one won. |
-| `message.failed` | Fires only when **all** channels in the array failed. |
+| `message.queued` | Send accepted, waiting to dispatch |
+| `message.routed` | Assigned to a carrier/provider |
+| `message.sent` | Dispatched to the carrier/RCS/WhatsApp provider |
+| `message.delivered` | Confirmed delivery to device |
+| `message.read` | Recipient opened. RCS and WhatsApp only. |
+| `message.failed` | Delivery failed at any stage. `payload.message_status = FAILED`. Fetch `GET /v3/messages/{id}` for the reason. |
 
-To confirm a specific message fell back from RCS to SMS, join `fallback_triggered` and `delivered` events on `message_id` and inspect `channel` on each.
+Webhook payload shape (top-level):
 
-For aggregate reporting, the MDR layer carries an `attempted_channels` array and a `delivered_channel` string per message. The `messaging-performance-analyzer` skill walks through reading these.
+```json
+{
+  "field": "message",
+  "sub_type": "message.delivered",
+  "timestamp": "2026-01-15T10:35:00+00:00",
+  "payload": {
+    "account_id": "<UUID>",
+    "message_id": "<UUID>",
+    "message_status": "DELIVERED",
+    "channel": "sms",
+    "inbound_number": "+1...",
+    "outbound_number": "+1...",
+    "template_id": "<UUID>"
+  }
+}
+```
 
-## Anti-Patterns
+The `payload.channel` field is what tells you which channel actually delivered. To distinguish "RCS delivered" from "SMS fallback delivered" for the same logical send, inspect `payload.channel` on the `message.delivered` event.
 
-- Authoring a single rich-card message and assuming auto-trim makes the SMS variant acceptable
-- Hardcoding `channels: ["rcs"]` on the send and treating the failure as a generic error (no fallback ever fires)
-- Treating the per-carrier `PENDING` window as a Sent bug — it's expected, plan fallback around it
-- Putting `whatsapp` in the fallback array without a pre-approved utility template (fallback will fail at template-resolution time)
-- Using `force_fallback` in production traffic
+### Events that are NOT verified — do not assume they exist
+
+Earlier drafts of this skill referenced events like `message.channel_selected` and `message.fallback_triggered`. **Those names are not in the v3 docs.** The only verified `message.*` sub-types are `queued`, `routed`, `sent`, `delivered`, `read`, `failed`.
+
+If a customer's integration depends on a dedicated "fallback fired" event, reconstruct it from what's documented:
+
+- For an `["rcs", "sms"]` send, observe `message.delivered` events and check `payload.channel` — `"sms"` on what was meant to be an RCS-first send is the fallback signal.
+- For a failed RCS attempt that succeeded via SMS, the v3 docs don't promise an explicit pairing. Reconstruct by correlating `message.failed` (RCS) with a separate `message.delivered` (SMS) sharing the same logical send.
+- If you genuinely need a dedicated fallback event, ask Sent — don't invent the name.
+
+### Send-time failure codes (verified)
+
+On `message.failed`, fetch the message and read `description`. Verified codes that may appear:
+
+| Code | Meaning |
+|---|---|
+| `ERR_CONSENT_BLOCKED` | Recipient is opted out or on suppression list. No provider call. |
+| `ERR_ROUTE_DENIED` | No active route could deliver to the requested channel/country. |
+| `ERR_TEMPLATE_PARAMS_INVALID` | Required template variables missing or failed regex validation. |
+
+Per-carrier RBM rejection codes are external (Google) and not surfaced as a structured field in v3.
+
+## Testing fallback in lower environments
+
+Sent's v3 docs document **sandbox mode** as the testing affordance: add `"sandbox": true` to the request body and the API returns a realistic fake response without a provider call. Response includes `X-Sandbox: true` header.
+
+Sandbox mode is documented for `POST /v3/messages` and most other mutation endpoints.
+
+The v3 docs do **not** document a `force_fallback` flag, a test-recipient registry, or per-carrier launch-state overrides. Earlier drafts referenced these — treat as inferred / unverified. If a customer needs to exercise the SMS-fallback path specifically in a lower environment, the documented approach is:
+
+1. Send with `sandbox: true` to validate request shape without side effects.
+2. To exercise the real fallback path against the real provider chain, send with a small recipient list including known-non-RCS-capable numbers.
+3. For pre-launch testing, send with `["sms"]` first to confirm SMS compliance and webhook plumbing, then introduce `["rcs", "sms"]` once RCS is approved.
+
+## What's NOT in v3 (gap notes)
+
+- A dedicated `message.fallback_triggered` webhook event.
+- A `message.channel_selected` event.
+- A `fallback_policy` field on the Sender Profile or on the send request.
+- A `force_fallback` flag for non-prod testing.
+- An MDR export schema documenting `attempted_channels` / `delivered_channel` fields.
+- Per-carrier rollout-status fields.
+
+Anything above that appears in customer-facing guidance should be flagged as inferred and confirmed with Sent before relying on it.
+
+## Anti-patterns
+
+- Inventing a `fallback_policy` field — it doesn't exist in v3; use the `channel` array.
+- Inventing `message.fallback_triggered` or `message.channel_selected` webhook events — they're not in the documented lifecycle.
+- Sending with `["rcs"]` and expecting SMS to back it up. RCS-only means RCS-or-fail.
+- Treating a long channel array like `["rcs", "whatsapp", "sms"]` as a waterfall. Per v3 docs, multiple channels create one message per channel (broadcast). Use `["rcs", "sms"]` for the documented fallback shape.
+- Assuming Sent auto-trims rich RCS content gracefully into SMS. Trimming behavior isn't in v3 docs — author SMS variants explicitly.
+- Using `sandbox: true` in production traffic — sandbox is for tests, not real sends.

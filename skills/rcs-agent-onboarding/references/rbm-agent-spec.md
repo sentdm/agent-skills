@@ -1,103 +1,55 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: "RCS specifics (Sent-confirmed)", "Webhook event lifecycle (verified from quickstart)", "Channel selection (POST /v3/messages)", "What is NOT in v3 docs") -->
+
 # RBM Agent Spec — Reference
 
-Supporting reference for `rcs-agent-onboarding`. The fields, capabilities, and lifecycle details for an RCS Business Messaging agent on Google's RBM platform. Canonical source: [Google RBM docs](https://developers.google.com/business-communications/rcs-business-messaging).
+Supporting reference for `rcs-agent-onboarding`. This doc separates **what Sent exposes** about an RCS Agent from **what lives in Google RBM** (the underlying carrier platform). Keep that line bright: anything not in the Sent v3 docs snapshot is external context and should be linked, not mirrored.
 
-## Agent Identity Fields
+Canonical Google source: [RCS Business Messaging docs](https://developers.google.com/business-communications/rcs-business-messaging).
 
-| Field | Notes |
+## Sent's RCS setup model (verified)
+
+- **Not self-service.** Per Sent's channel-setup docs, RCS setup requires a one-time carrier approval that has to be initiated by contacting Sent (`support@sent.dm`). There is no dashboard button or v3 API endpoint that provisions an RCS Agent end-to-end on its own.
+- **Post-approval visibility.** Once Sent (with Google + the carriers) has finished the approval cycle, the RCS Agent — Sent calls it a **Branded Sender** for RCS — appears in the dashboard alongside the customer's other channels.
+- **No rollout-status or capability-check endpoint.** The v3 API does not surface a per-carrier launch state, an agent-ID field, or a recipient capability probe. To observe RCS behavior after launch, use `GET /v3/messages/{id}`, `GET /v3/messages/{id}/activities`, and webhook events (see `rcs-fallback-patterns.md`).
+
+If a request implies "click here to create my RCS agent", correct it. The handoff is human-initiated by emailing `support@sent.dm` with the launch evidence packet.
+
+## Sent-side terminology (verified)
+
+These are the terms Sent uses in its public docs and dashboard. Use them when talking to a Sent customer instead of Google's RBM API names.
+
+| Sent term | What it is |
 |---|---|
-| `displayName` | Shown on every RCS bubble. Match the tenant's public-facing brand exactly. |
-| `description` | Short blurb shown in the agent's "about" panel. Recipients see it. |
-| `logoUri` | Square brand mark. Specific dimensions in the RBM docs; under-spec leads to verification kickback. |
-| `heroUri` | Optional banner shown in the agent profile. |
-| `color` | Brand color used for outline and accents in the messaging UI. |
-| `contactInfo.url` | The tenant's public website. Domain must be in `agent.verifiedDomains`. |
-| `contactInfo.email` | Support contact. Used by Google during verification. |
-| `contactInfo.phone` | Support phone. Used by Google during verification. |
-| `verifiedDomains[]` | Every URL domain the agent will link to. Add at creation; later changes re-trigger review. |
-| `phoneNumbers[]` | Optional. Numbers the agent can be reached at (for click-to-call). |
+| **RCS Agent** | The branded RCS sender identity that recipients see. Created on Sent's side after carrier approval. |
+| **Branded Sender** | Sent's umbrella term for the per-channel sender identity (the RCS Agent for RCS, the WABA-attached phone number for WhatsApp, the 10DLC long code for SMS). |
+| **Rich Card** | A single card with media, title, description, and suggestion chips. |
+| **Carousel Card** | A horizontally-swiped collection of up to **10** Rich Cards. |
+| **Suggestion Chip** | A tap-to-act chip below or inside a message. Three documented kinds: quick reply, open URL, dial number. |
 
-## Capabilities
+## Google RBM-side concepts (external — link, do not mirror)
 
-Agents declare which RCS features they need. Declaring more than needed is harmless; declaring less than needed causes runtime errors.
+The following live entirely in Google's RBM platform and are **not** exposed in the Sent v3 API. Don't pretend Sent surfaces them; treat them as platform context the customer hears about during review.
 
-| Capability | What it enables |
-|---|---|
-| Suggested replies | Tap-to-send chips below the message |
-| Suggested actions | Tap-to-open URLs, dial, view location, add to calendar |
-| Rich card (standalone) | A single card with media + title + description + actions |
-| Rich card carousel | Multiple cards swiped horizontally |
-| File attachments | PDF, etc. |
-| Image attachments | JPG / PNG |
-| Video attachments | MP4 |
-| Audio attachments | MP3 / OGG |
+- Agent identity fields (`displayName`, `logoUri`, `heroUri`, `color`, `verifiedDomains`, contact info) — set during Sent's onboarding handoff, not via Sent v3 API. See [Google's agent reference](https://developers.google.com/business-communications/rcs-business-messaging/reference/business-communications/rest/v1/brands.agents).
+- RBM capabilities the agent must declare (suggested replies, suggested actions, standalone rich card, rich card carousel, file/image/video/audio attachments). See [Google's capabilities guide](https://developers.google.com/business-communications/rcs-business-messaging/guides/build/capabilities).
+- RBM use case taxonomy (`TRANSACTIONAL`, `OTP`, `PROMOTIONAL`, `CUSTOMER_CARE`, `MULTI_USE`).
+- Verification and launch-review lifecycle (Google review → per-carrier review → carrier-specific `ENABLED` / `PENDING` rollout). Typical turnaround: 1-7 business days for verification; longer for launch.
+- Per-carrier rejection codes and rejection reasons. See [Google's launch guidance](https://developers.google.com/business-communications/rcs-business-messaging/guides/learn/launch).
+- Capability-check endpoint (`https://rcsbusinessmessaging.googleapis.com/v1/users/{phoneNumber}:capabilities`) — Google-side, requires direct RBM API access, not part of Sent v3.
 
-## Use Cases
+## What Sent does NOT expose (gap notes)
 
-Use cases on RBM mirror TCR in spirit — pick the narrowest accurate one.
+These would be useful for an agent but are not in the v3 docs snapshot:
 
-| Use case | When to pick |
-|---|---|
-| `TRANSACTIONAL` | Order, shipping, appointment, payment notifications. Triggered by recipient action. |
-| `OTP` | One-time codes only. Lowest review bar, highest reach. |
-| `PROMOTIONAL` | Marketing campaigns. Highest review bar. |
-| `CUSTOMER_CARE` | Two-way support. |
-| `MULTI_USE` | Last resort. Raises the bar without practical gain. |
+- A field on the message resource indicating per-carrier launch state for the originating RCS Agent.
+- A capability-check endpoint on Sent's side.
+- A public `fallback_policy` field — channel selection is done via the `channel` array on the send request (see `rcs-fallback-patterns.md`).
+- A structured RBM rejection code on failed messages. The `message.failed` webhook carries `payload.message_status = FAILED`; the human-readable reason lives in the `description` of the message detail fetched via `GET /v3/messages/{id}`.
 
-## Verification
+## Anti-patterns
 
-Google reviews:
-1. Brand identity — display name, logo, color match the tenant's public brand
-2. Domain control — each `verifiedDomains` entry must respond to a verification probe (DNS or file)
-3. Contact info validity — email and phone must work
-4. Use-case fit — sample messages line up with the declared use case
-
-Typical turnaround: 1-7 business days. Rejection reasons usually surface in the agent's review state with a short explanation.
-
-## Launch Review
-
-After verification, the agent goes into `launch_review`. This is where:
-
-- Google reviews the actual content / capabilities the agent will use.
-- Each carrier (T-Mobile, AT&T, Verizon, plus regional MVNOs) independently signs off.
-
-The agent state goes to `launched` when Google approves; individual carriers may still be rolling out for weeks afterward. Track per-carrier state explicitly:
-
-```
-launch_status per carrier:
-  T-Mobile:  ENABLED
-  AT&T:      PENDING
-  Verizon:   ENABLED
-  US Cellular: PENDING
-```
-
-Until a carrier is `ENABLED`, recipients on that carrier will not receive RCS from this agent. They'll fall through to whatever fallback policy is configured.
-
-## Capability Detection at Send Time
-
-Before sending, you can call:
-
-```
-GET https://rcsbusinessmessaging.googleapis.com/v1/users/{phoneNumber}:capabilities?agentId={agentId}
-```
-
-The response indicates whether the recipient handset is RCS-capable for this agent. If not, the application (or Sent's fallback policy) decides what to do.
-
-In high-volume flows, prefer batch capability resolution or cached lookups (capabilities change rarely but are not stable forever — re-check periodically).
-
-## Fallback Policy Patterns
-
-| Policy | Behavior | When to use |
-|---|---|---|
-| `sms` (Sent built-in) | If RBM rejects with capability error, Sent routes the same message via the Sender Profile's SMS sender | Default for transactional / 2FA-style traffic |
-| `none` | RBM rejection surfaces to the application as an error | When the application needs to choose a different message for SMS |
-| `application-routed` | Same as `none` — the application catches the error and routes | Same |
-
-## Anti-Patterns
-
-- One RBM agent shared across multiple tenants — recipients see the wrong brand
-- Capabilities declared as a strict subset of what the application sends — runtime errors at scale
-- Adding `verifiedDomains` after launch — forces full re-review
-- Sending the same payload to RCS and SMS without re-formatting — SMS has no rich cards, no suggested replies
-- Hardcoding `agentId` in application code instead of attaching it to a Sender Profile
-- Ignoring per-carrier rollout state — silent gaps in coverage for weeks
+- Claiming Sent surfaces an `agentId` or per-carrier rollout state in v3 — it doesn't.
+- Promising the customer they can self-serve an RCS Agent through the dashboard — the docs explicitly say to contact `support@sent.dm`.
+- Restating Google's agent JSON schema in this file — link to Google's docs instead so this skill stays small and current.
+- Using Google-side names (`displayName`, `verifiedDomains`) when talking to a Sent customer about their dashboard. Use Sent's terms (RCS Agent, Branded Sender, Rich Card, Carousel Card, Suggestion Chip).
+- Treating a Carousel Card as unbounded — Sent's docs cap it at 10 Rich Cards.

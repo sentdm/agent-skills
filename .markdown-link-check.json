@@ -1,0 +1,18 @@
+{
+  "ignorePatterns": [
+    { "pattern": "^https://developers\\.facebook\\.com" },
+    { "pattern": "^https://developers\\.google\\.com" },
+    { "pattern": "^https://business\\.facebook\\.com" },
+    { "pattern": "^https://www\\.campaignregistry\\.com" },
+    { "pattern": "^https?://([a-zA-Z0-9-]+\\.)*example\\.(com|net|org)(/|$)" },
+    { "pattern": "^https?://([a-zA-Z0-9-]+\\.)*example(/|$)" },
+    { "pattern": "^https?://([a-zA-Z0-9-]+\\.)*(test|invalid|localhost)(/|$)" }
+  ],
+  "replacementPatterns": [],
+  "httpHeaders": [],
+  "timeout": "20s",
+  "retryOn429": true,
+  "retryCount": 2,
+  "fallbackRetryDelay": "30s",
+  "aliveStatusCodes": [200, 206, 301, 302, 308, 403, 405]
+}

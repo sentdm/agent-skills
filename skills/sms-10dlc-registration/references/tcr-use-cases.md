@@ -1,8 +1,24 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Compliance form — verified required fields, US-specific (10DLC), What is NOT in v3 docs) -->
+
 # TCR Use Cases & Vetting — Reference
 
 Supporting reference for `sms-10dlc-registration`. The Campaign Registry's use-case taxonomy and the practical effect of each choice on throughput and carrier filtering. The canonical list is on the [TCR website](https://www.campaignregistry.com/) — use this doc for the *interpretation* in a multi-tenant Sent deployment.
 
-## Use Cases Sorted by Throughput & Filtering Risk
+## Sent's compliance-form taxonomy (verified)
+
+Sent's compliance form exposes a **five-option** use-case selector to the tenant, not the full TCR taxonomy. Pick one of these on the form:
+
+| Sent compliance-form option | Typical underlying TCR use case(s) |
+|---|---|
+| **Authentication** | `2FA` |
+| **Notifications** | `ACCOUNT_NOTIFICATION`, `DELIVERY_NOTIFICATION`, `FRAUD_ALERT`, `SECURITY_ALERT`, `PUBLIC_SERVICE_ANNOUNCEMENT` |
+| **Marketing** | `MARKETING` |
+| **Customer Service** | `CUSTOMER_CARE` |
+| **High Volume** | `MIXED` / high-throughput senders (Sent maps internally) |
+
+Sent files the TCR-side payload on the tenant's behalf — the deeper TCR taxonomy below is for interpreting that mapping and reasoning about why a use-case selection might trigger more or less filtering. The tenant only sees and chooses one of the five form values.
+
+## TCR use cases sorted by throughput & filtering risk (external interpretation)
 
 | Use case | Typical TPS (post-vetting) | Filtering risk | When to pick |
 |---|---|---|---|
@@ -21,22 +37,24 @@ Supporting reference for `sms-10dlc-registration`. The Campaign Registry's use-c
 | `SECURITY_ALERT` | High | Low | Specialized variant of FRAUD_ALERT for non-financial security. |
 | `SOCIAL` | Medium | Medium | Person-to-person-feeling but business-sent (matchmaking, social apps). |
 
-## Brand External Vetting
+Specific TPS numbers and vetting-score-to-throughput thresholds are **external** — Sent's docs only confirm the tier-level account-wide rate caps (Starter 60 msg/min, Growth 300 msg/min, Enterprise custom), not TCR / carrier per-campaign throughput.
 
-Brands can submit for **External Vetting** via TCR-approved vetting providers. This produces a `vettingScore` 0-100 that:
+## Brand external vetting (external context)
+
+Brands can submit for **External Vetting** via TCR-approved vetting providers. This produces a `vettingScore` that:
 
 - Unlocks higher per-campaign TPS caps from each carrier.
 - Reduces the filtering aggressiveness applied to the campaign's traffic.
 - Cannot be inherited from another brand — every brand vets independently.
 
-Brands without vetting are capped at low TPS regardless of campaign use case. For any serious sender, the cost of vetting pays back quickly via the throughput uplift.
+The exact vetting-score-to-throughput mapping is set by each carrier and not exposed in Sent's docs. Treat as external (TCR + carrier docs).
 
-## Required Campaign Attributes
+## Required campaign attributes (TCR-side, external)
 
-Every campaign declares these. Don't lie — carrier-level scanning catches mismatches:
+Every TCR campaign declares these. They're not directly user-visible on Sent's compliance form, but Sent files them from the form data plus dashboard configuration:
 
-- **Subscriber opt-in** — How recipients agreed to receive these messages (e.g. checkbox at signup, sent `START`, double opt-in).
-- **Opt-out keywords** — Minimum `STOP`. Most senders also accept `UNSUBSCRIBE`, `CANCEL`, `END`, `QUIT`.
+- **Subscriber opt-in** — How recipients agreed to receive these messages. Captured on Sent's compliance form as the **opt-in mechanism URL or description**.
+- **Opt-out keywords** — Minimum `STOP`. Managed on Sent in the **Compliance → Opt Keywords** tab; not embedded per sample message.
 - **Help keywords** — Minimum `HELP`. Reply should describe what the campaign is and how to opt out.
 - **Embedded link** — Whether your messages include URLs (`yes` / `no`).
 - **Embedded phone** — Whether your messages include phone numbers (`yes` / `no`).
@@ -44,19 +62,21 @@ Every campaign declares these. Don't lie — carrier-level scanning catches mism
 - **Age-gated content** — Alcohol, gambling, firearms, tobacco. `yes` requires age verification at opt-in.
 - **Direct lending** — Whether the campaign is for direct loans. Subject to additional review.
 
-## Sample Messages
+## Sample messages
 
 TCR requires 2-5 sample messages per campaign. Carrier filters use these to validate live traffic. Mismatches between samples and production are the most common reason for downgrade.
 
 Good sample:
-> {Brand Name}: Your order #1029 has shipped. Track: https://example.com/track/1029. Reply STOP to opt out.
+> {Brand Name}: Your order #1029 has shipped. Track: https://example.com/track/1029.
 
 Bad sample (don't do):
 > Your order has shipped!
 
-Bad because: no brand name, no link/tracking specifics that mirror production, no opt-out language.
+Bad because: no brand name, no link/tracking specifics that mirror production.
 
-## Per-Carrier Filtering Notes
+Note: Opt-out language (`Reply STOP to opt out.`) is conventional in samples and many carriers expect to see it, but the **rule** that every Sent-filed sample must literally embed `STOP` is not confirmed in Sent's docs — Sent treats opt-out as a separate field on the compliance form (Opt Keywords tab) rather than embedded in each sample. Sample-level opt-out is good carrier hygiene; the Sent-required field lives elsewhere.
+
+## Per-carrier filtering notes (external)
 
 TCR-approved doesn't mean delivered. Each major US carrier filters independently:
 
@@ -64,9 +84,9 @@ TCR-approved doesn't mean delivered. Each major US carrier filters independently
 - **AT&T** — Stricter on message-volume spikes than on content. Pace sends.
 - **Verizon** — More content-sensitive on `MARKETING` and `MIXED`. Promotional content in an `ACCOUNT_NOTIFICATION` campaign gets caught here first.
 
-Track per-carrier delivery in the MDR funnel and reconcile per-carrier approval state on the campaign daily.
+Track per-carrier delivery in the MDR funnel and reconcile per-carrier approval state on the campaign daily. Specific carrier rejection codes are external (Twilio / Bandwidth / Sinch / direct-aggregator docs).
 
-## Common Rejection Reasons
+## Common rejection reasons (external taxonomy)
 
 | Reason | What it means | Fix |
 |---|---|---|

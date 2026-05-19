@@ -1,0 +1,17 @@
+skill: sent
+cases:
+  - query: "I want to send messages through Sent but don't know where to start."
+    expect: trigger
+    rationale: Open-ended Sent onboarding — the meta-dispatcher's job is to route to the right channel-specific skill.
+  - query: "Which Sent skill should I use to onboard a new SMS + WhatsApp + RCS tenant?"
+    expect: trigger
+    rationale: Explicit request for skill-routing across the Sent skill set — canonical meta-dispatch scenario.
+  - query: "What can Sent do for me?"
+    expect: trigger
+    rationale: High-level capability ask — the meta-skill should list the available SMS / WhatsApp / RCS skills and route based on intent.
+  - query: "Help me debug a Postgres query."
+    expect: no_trigger
+    rationale: No Sent / messaging context whatsoever. Generic database work, out of scope for any sent-skills skill.
+  - query: "Walk me through onboarding a tenant for WhatsApp."
+    expect: ambiguous
+    rationale: Specific enough to route directly — waba-embedded-signup (provisioning the WABA) and waba-template-author (first templates) both apply. The meta-skill may still legitimately answer "use waba-embedded-signup first"; treat a direct waba-embedded-signup trigger as equivalent pass.

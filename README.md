@@ -34,6 +34,21 @@ Plus `/sent` — a meta dispatcher that lists the skills and routes by intent.
 
 ---
 
+## Command ↔ skill mapping
+
+| Slash command | Skill |
+|---|---|
+| `/mdr-analyze` | `messaging-performance-analyzer` |
+| `/rcs-onboard` | `rcs-agent-onboarding` |
+| `/sender-plan` | `sender-profile-architect` |
+| `/sms-register` | `sms-10dlc-registration` |
+| `/template-ui` | `template-builder-ui` |
+| `/waba-auth` | `waba-embedded-signup` |
+| `/waba-template` | `waba-template-author` |
+| `/sent` | `sent` (meta-dispatcher) |
+
+---
+
 ## Quick Start
 
 ### Claude Code — marketplace install (recommended)
@@ -108,11 +123,17 @@ In short:
 .claude-plugin/    Plugin + marketplace manifests
 .claude/commands/  Slash command shims
 skills/            Seven domain skills (one SKILL.md per directory)
-references/        Supplementary docs cited by the skills
+  <name>/
+    ├── SKILL.md
+    ├── references/   ← per-skill reference docs
+    └── scripts/      ← per-skill executable utilities (Python, stdlib only)
+references/        Cross-cutting only (currently: sent-glossary.md)
 docs/              Authoring + setup guides
 scripts/           Repo tooling (skill validator)
 .github/           Issue + PR templates, validate-skills workflow
 ```
+
+Each skill directory is self-contained, so it can be zipped and uploaded to claude.ai as a standalone bundle.
 
 ---
 

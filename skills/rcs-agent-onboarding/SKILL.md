@@ -1,120 +1,156 @@
 ---
 name: rcs-agent-onboarding
-description: Creates and verifies an RCS Business Messaging (RBM) agent with Google so a tenant can send rich messages on RCS via Sent. Use when a user mentions "RCS", "RBM", "RCS Business Messaging", "RCS agent", "verified sender", "rich card", "suggested action", "RCS fallback to SMS", or asks how to launch an RCS sender. Use when onboarding a tenant for RCS, defining the agent's capabilities (rich cards, carousels, suggested actions), setting the SMS fallback policy, or debugging an agent that isn't reaching a particular carrier. Covers agent creation, verification, capability declaration, launch review, and the fallback decision.
+description: Guides RCS/RBM onboarding for Sent customers by preparing agent identity, launch evidence, carrier-approval handoff, SMS fallback, and post-launch verification. Use when a user says RCS agent, RBM, rich business messaging, carrier launch, RCS approval, RCS fallback, branded messages, agent verification, capability check, or wants to send RCS through Sent.
 ---
 
-# RCS Agent Onboarding
+<!--
+Verified against Sent sources:
+- https://docs.sent.dm/start/quickstart/channel-setup
+- https://docs.sent.dm/start/quickstart/first-message
+- https://docs.sent.dm/start/quickstart/dashboard-walkthrough
+- Sent v3 OpenAPI: POST /v3/messages, GET /v3/messages/{id}, GET /v3/messages/{id}/activities, /v3/profiles, /v3/profiles/{profileId}/complete
+
+Review notes:
+- Sent docs say RCS setup is not self-service, requires one-time carrier approval, and should be initiated by contacting Sent.
+- Sent docs verify automatic SMS fallback when RCS is unavailable and explicit fallback/broadcast using channel arrays such as ["rcs", "sms"].
+- Treat Google RBM launch states, capability endpoints, and per-carrier rollout fields as external platform context unless Sent exposes them in the customer’s account or docs.
+-->
+
+# RCS agent onboarding
 
 ## Overview
 
-RCS Business Messaging (RBM) is Google's API for branded, rich messaging on the Android default messaging app. Unlike SMS, RCS requires a per-tenant **Agent** that's been verified by Google and approved by each mobile carrier the agent wants to reach. The agent declares its capabilities (rich cards, carousels, suggested replies, suggested actions), its verified domains, and what to do when the recipient isn't RCS-capable. This skill walks through agent creation, the verification + launch review, and the decisions that affect deliverability across carriers.
+Use this skill to prepare a Sent customer for RCS launch without inventing a self-service provisioning flow. Sent’s public channel setup guidance says RCS setup is initiated through Sent, requires one-time carrier approval, and is not self-service. The agent’s job is to collect clean launch evidence, design fallback behavior, confirm profile/channel readiness, and create a verification plan for the first production sends.
 
-RCS is *not* SMS-with-features. Provisioning, billing, and delivery semantics all differ — treat it as its own channel.
+RCS onboarding touches three separate layers. Sent owns the unified messaging API and fallback behavior. Google RBM and carriers own brand/agent review and launch approval. The customer owns brand assets, use-case clarity, consent, and support readiness. Keep those boundaries explicit.
 
-## When to Use
+## When to use
 
-Use when:
-- A tenant wants to send RCS via Sent for the first time
-- An agent is stuck in `pending_verification` or `launch_review`
-- A tenant's RCS messages aren't reaching one specific carrier despite delivering on others
-- Defining or changing the agent's capabilities or fallback policy
-- Auditing an existing agent for missed capability declarations after a feature change
+Use this skill when the request mentions RCS, RBM, RCS agent, carrier launch, branded messaging, rich card, carousel, SMS fallback from RCS, or RCS approval. Use it for launch preparation, evidence gathering, fallback decisions, and post-launch smoke tests.
 
-Do **not** use for:
-- The Sender Profile data model that holds `agent_id` — use `sender-profile-architect`
-- Investigating delivery rates once the agent is live — use `messaging-performance-analyzer`
-- Authoring rich-card payloads at runtime — that's regular RBM API work, not onboarding
+Do not use this skill for live delivery-rate analysis after launch; use `messaging-performance-analyzer`. Do not use it to register US SMS compliance; use `sms-10dlc-registration`. Do not promise direct Graph/RBM API provisioning unless the user confirms they operate the external RBM account outside Sent.
 
-## Agent Lifecycle
+## Source-of-truth boundaries
 
+| Topic | Treat as | Action |
+|---|---|---|
+| Sent API sending | Sent API fact | Use `POST /v3/messages` with templates and channel arrays. |
+| RCS setup path | Sent documentation fact | Tell the user RCS setup is initiated by contacting Sent and requires approval. |
+| SMS fallback | Sent documentation fact | Use Sent’s fallback behavior and explicit `channel: ["rcs", "sms"]` where appropriate. |
+| Google RBM agent fields | External platform context | Collect assets and evidence, but do not claim Sent exposes those fields. |
+| Per-carrier launch states | External platform context | Track approval evidence from Sent/Google/carriers; do not invent Sent status fields. |
+| Rich-card rendering | Runtime evidence | Verify with test sends and message activities after setup is active. |
+
+## Process
+
+### 1. Classify the requested launch
+
+Start by asking what the RCS agent will do, who receives the messages, and whether SMS fallback is required. The use case should be concrete enough for carrier review and template design.
+
+A good launch statement names the brand, audience, consent source, message types, support contact, and fallback behavior. A weak launch statement says only “we want RCS for marketing” or “we need branded SMS.”
+
+**Example.** “Acme Logistics wants RCS order updates for US consumers who opted in at checkout. Messages include shipment confirmation, delivery window changes, and support links. If RCS is unavailable, send the SMS version through the same Sent profile.”
+
+### 2. Build the RCS evidence packet
+
+Collect review-ready evidence before involving Sent. This reduces approval loops and prevents the agent from submitting vague brand claims.
+
+| Evidence | What to collect | Why it matters |
+|---|---|---|
+| Brand identity | Legal name, public brand name, website, logo, brand color, description | Reviewers compare the agent identity to the live business. |
+| Contact and support | Support email, support phone, help URL, privacy policy | RCS users need visible ways to identify and contact the sender. |
+| Use case | Transactional, OTP, marketing, customer care, or mixed use | Approval and fallback design depend on intent and consent. |
+| Consent | Opt-in path, screenshot/URL, privacy policy, opt-out wording | Carriers need proof that recipients expect the messages. |
+| Message examples | Representative plain-text and rich examples | Rich content must match the declared use case and brand. |
+| SMS fallback | Equivalent SMS copy and approved SMS sender/compliance status | Fallback fails if SMS compliance is not ready. |
+
+### 3. Check Sent profile and SMS fallback readiness
+
+Confirm that the customer has a Sender Profile in the Sent dashboard or through `/v3/profiles`. The dashboard walkthrough shows Sender Profiles with a display name, brand description, `x-sender-id`, and SMS/WhatsApp configuration status. The OpenAPI confirms profile creation, retrieval, update, and completion endpoints.
+
+If the launch requires US SMS fallback, verify that the SMS side is compliant before RCS goes live. Sent’s channel setup guide recommends using the same phone number across SMS, WhatsApp, and RCS where possible, but fallback must still have a valid SMS route and compliance posture.
+
+**Example fallback request.** After Sent confirms RCS is configured, a customer can request an RCS-first send with SMS fallback/broadcast semantics using a channel array such as:
+
+```json
+{
+  "to": ["+15551234567"],
+  "channel": ["rcs", "sms"],
+  "template": { "id": "template_uuid" }
+}
 ```
-created ──► pending_verification ──► verified ──► launch_review ──► launched
-   │                │                                  │              │
-   ▼                ▼                                  ▼              ▼
-deleted        rejected                          changes_requested  suspended
-                                                       │              │
-                                                       └──► launch_review ──► launched
-```
 
-States that matter:
+Explain that Sent may create separate messages for each recipient/channel pair when multiple channels are specified. Analyze RCS and SMS attempts separately after sending.
 
-- **created** — Agent record exists in RBM; not visible to recipients yet.
-- **pending_verification** — Google is verifying the brand identity, domains, and contact information.
-- **verified** — Brand approved. Now you can submit for launch review.
-- **launch_review** — Google reviews the agent's content, capabilities, and use cases. Each carrier also signs off here.
-- **launched** — Agent is live in production. Carriers may still roll out at their own pace.
-- **suspended** — Google or a carrier has paused the agent; sending is blocked.
+### 4. Route the launch through Sent
 
-Persist this state on the Sender Profile's RCS sender record. Don't infer it from the RBM API on every send.
+Because Sent states that production RCS setup is not self-service, prepare a handoff note for Sent rather than pretending to click through an RBM console. Include the evidence packet, the Sender Profile identifier, the target countries/carriers if known, fallback requirements, and the requested go-live timeline.
 
-## Onboarding Workflow
+A clean handoff reads like this:
 
-1. **Decide brand identity.** Agent display name, brand logo, brand color, description. The brand presented to the recipient is the agent — recipients see it on every RCS bubble. Mismatches with the company's public branding are the most common reason verification gets bounced back.
+> “Please initiate RCS setup for Sender Profile `support-us` / `x-sender-id` `...`. Brand is Acme Logistics, website `https://acme.example`, use case shipment notifications and customer-care replies. Opt-in occurs at checkout. SMS fallback is required through the existing US SMS route. Attached are logo, brand color, support contacts, privacy policy, and five message examples.”
 
-2. **Pick the use case.** RBM has explicit use cases — `CUSTOMER_CARE`, `TRANSACTIONAL`, `OTP`, `MULTI_USE`, etc. Same principle as TCR: pick the narrowest accurate one. `MULTI_USE` raises the review bar.
+### 5. Define the test plan before launch
 
-3. **List verified domains.** Every URL the agent will link to must be on a domain Google has verified you control. Add them all *at creation*; adding domains later forces re-review.
+Write the first-send test plan before approval arrives. Include a small set of internal numbers, target devices/carriers when available, template IDs, expected channel behavior, and rollback criteria.
 
-4. **Declare capabilities you actually need.** Subset of:
-   - Suggested replies (chips below the message)
-   - Suggested actions (open URL, dial, view location, calendar event)
-   - Rich cards (single or carousel)
-   - File / image / video attachments
-   Declaring capabilities you don't use is harmless. Declaring less than you use causes runtime errors.
+| Test | Expected result | Evidence to collect |
+|---|---|---|
+| RCS-capable internal device | RCS message reaches `DELIVERED`; `READ` may appear if opened. | Sent message status and activities. |
+| Non-RCS-capable recipient | SMS fallback path succeeds where fallback is requested. | Separate RCS and SMS message IDs/statuses. |
+| Rich content render | Cards/buttons render as designed on target devices. | Screenshots and message activities. |
+| Webhook callback | Customer endpoint receives delivery/read events. | Sent webhook event history and customer logs. |
 
-5. **Define the SMS fallback policy.** When a recipient isn't RCS-capable, RBM rejects the send with a capability error. Decide up-front:
-   - **Fall back to SMS** — Sent's `fallback_policy = 'sms'` will route through the same Sender Profile's SMS sender. Requires the SMS sender to be 10DLC-registered. Bills as SMS.
-   - **No fallback** — Sent surfaces the error to the application. Pick this if you want to control fallback semantically (different template, different timing).
-   - **Application-routed** — Same as no fallback; the application decides.
+### 6. Verify launch with Sent message evidence
 
-6. **Submit for verification.** Google checks brand identity, domain control, contact details. Typically 1-7 business days.
+After Sent confirms the RCS setup is active, send a controlled batch using `POST /v3/messages`. For every Sent `message_id`, retrieve `GET /v3/messages/{id}` and `GET /v3/messages/{id}/activities`. Confirm that RCS messages progress through the documented lifecycle and that SMS fallback behaves as expected.
 
-7. **Submit for launch review.** Once verified, each agent goes through a content / capability review. Each carrier (T-Mobile, AT&T, Verizon, regional MVNOs) approves independently. Expect uneven rollout — an agent can be `launched` overall but unreachable on a single carrier for weeks after.
+If the first batch fails, do not guess. Separate setup failures from fallback failures, template/payload failures, and webhook ingestion failures. Use `messaging-performance-analyzer` for deeper funnel analysis once the launch is producing enough evidence.
 
-8. **Persist `agent_id` and per-carrier rollout state on the RCS sender record.** Per-carrier state is what tells you why a specific recipient on T-Mobile isn't getting your messages even though Verizon recipients are.
+## Common rationalizations to avoid
 
-## Capability vs Fallback — Common Mistakes
+Do not tell the user RCS is self-service in Sent. Sent’s channel setup guide says to contact Sent and wait for carrier approval.
 
-| Question | Answer |
-|---|---|
-| Recipient on iOS — RCS or SMS? | iOS supports RCS as of recent releases, but capability is per-handset. Always check the capability endpoint, don't assume. |
-| Recipient on Android with no Google Messages? | Not RCS-capable. Fall back. |
-| Carousel rendered on T-Mobile but not AT&T? | Carrier hasn't rolled out the carousel capability for this agent yet. Either wait or downgrade the payload for that carrier. |
-| Suggested-action URL doesn't open? | URL domain isn't on the agent's verified-domains list. Add and re-review. |
+Do not create a fake `fallback_policy` field in Sent requests. Use documented channel arrays and account-level fallback behavior unless a verified account-specific API field exists.
 
-## Common Rationalizations
+Do not assume SMS fallback is safe because RCS is approved. SMS fallback needs a compliant sender, especially for US A2P traffic.
 
-| Rationalization | Reality |
-|---|---|
-| "I'll skip the fallback policy — RCS will figure it out." | RBM rejects non-capable recipients with an error; without an explicit fallback, the tenant's user just gets nothing. |
-| "We can edit verified domains later." | Each change re-triggers Google review. Front-load domain registration. |
-| "`MULTI_USE` is the safe choice." | It raises the review bar. Pick the narrowest accurate use case. |
-| "Once Google verified us, we're live on every carrier." | Google verification is brand identity. Each carrier still has to approve the agent separately. Expect weeks of staggered rollout. |
-| "We can share one agent across tenants." | An agent represents a brand. Sharing across tenants means recipients see the wrong brand in their messages. One agent per tenant per brand. |
-| "I'll fall back to SMS using a different sender." | Sent routes fallback through the *same* Sender Profile's SMS sender by design — keeps the recipient experience consistent. Setting up a separate sender is an anti-pattern. |
+Do not conflate brand approval with template quality. An approved RCS agent can still fail if the message payload, media, or fallback copy is wrong.
 
-## Red Flags
+## Verification checklist
 
-- Agent display name or logo doesn't match the tenant's public-facing brand
-- Verified-domains list is shorter than the URLs the agent actually sends
-- Capabilities declared are a superset of what's used (harmless) *or* a subset (causes runtime errors)
-- No per-carrier rollout state tracked — silent failures on one carrier
-- Fallback policy not declared explicitly on the Sender Profile
-- Application code hardcodes `agent_id` instead of reading it from the Sender Profile
+- [ ] The user’s RCS use case is specific enough for review and not just “send rich messages.”
+- [ ] Brand identity, support contact, privacy policy, opt-in evidence, and sample messages are collected.
+- [ ] The Sent Sender Profile or `x-sender-id` is identified.
+- [ ] SMS fallback requirements are documented and routed to SMS compliance checks where needed.
+- [ ] The handoff explicitly says Sent must initiate RCS setup and carrier approval.
+- [ ] The first-send test plan includes RCS-capable, non-RCS-capable, rich-rendering, and webhook checks.
+- [ ] Post-launch verification uses Sent `message_id`, status, and activities.
+- [ ] External RBM facts are labeled as external context, not Sent API guarantees.
 
-## Verification
+## Related skills
 
-A correctly onboarded RCS sender has:
-- [ ] One RBM Agent per tenant brand, with consistent display name, logo, and colors
-- [ ] Use case narrower than `MULTI_USE` unless genuinely multi-purpose
-- [ ] Verified-domains list covers every URL the agent will link to
-- [ ] Capabilities declared match the actual payloads sent
-- [ ] Fallback policy explicitly set on the Sender Profile (`sms`, `none`, or application-routed)
-- [ ] Per-carrier rollout state stored and reconciled on a schedule
-- [ ] Sender Profile holds `agent_id`; nothing in application code is hardcoded
+Use `sent-skills:sms-10dlc-registration` before launch when SMS fallback touches US A2P traffic, opt-in evidence, 10DLC campaigns, or brand vetting.
 
-## Related Skills
+Use `sent-skills:sender-profile-architect` when the customer has multiple brands, tenants, departments, or profiles and needs a durable sender architecture.
 
-- `sender-profile-architect` — where `agent_id` and fallback policy attach in the data model
-- `sms-10dlc-registration` — the SMS sender that backs an RCS fallback policy
-- `messaging-performance-analyzer` — for diagnosing capability-mismatch and per-carrier rollout issues after launch
+Use `sent-skills:template-builder-ui` when the RCS launch needs reusable templates, rich component validation, or a template-creation workflow.
+
+Use `sent-skills:messaging-performance-analyzer` after launch when the user has message IDs, webhook events, failed sends, or delivery-rate symptoms.
+
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## Suggested bundled references and scripts
+
+| File | Type | Purpose |
+|---|---|---|
+| `references/rbm-agent-spec.md` | Payload/schema reference | Keep Google RBM identity fields, asset requirements, and review vocabulary outside the skill body. |
+| `references/rcs-launch-evidence-packet.md` | Worked example | Provide a complete filled-in launch packet for a realistic transactional RCS launch. |
+| `references/rcs-fallback-patterns.md` | Decision matrix | Compare RCS-only, RCS-first with SMS fallback, and multi-channel broadcast patterns. |
+| `scripts/rcs_preflight_check.py` | Validation script | Check that required evidence fields, URLs, media assets, and fallback settings are present before Sent handoff. |
+
+## Unverified claims to confirm or remove
+
+- Google RBM lifecycle states such as `pending_verification`, `launch_review`, or per-carrier launched states were not verified in Sent docs (these are Google-side, not exposed by Sent v3).
+- Sent does not expose RCS rollout-status or capability-check endpoints in v3; use Activities + webhook events to observe behavior.
+- Exact rich-card capability differences by carrier/device require external RBM evidence or live testing, not Sent docs alone.

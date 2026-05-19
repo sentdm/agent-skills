@@ -24,8 +24,17 @@ Every skill must be:
    - Start with what the skill does in third person ("Analyzes…", "Designs…", "Implements…")
    - Include at least one explicit "Use when …" trigger condition
    - Include the trigger phrases users actually say ("10DLC", "TCR", "RBM agent", "MDR", "embedded signup", "template category")
-6. Body stays ≤ 500 lines. Push detail to `references/<name>.md` when it grows beyond that.
-7. Run `bash scripts/validate-skills.sh` and confirm it exits 0.
+6. Body stays ≤ 500 lines. Push detail to `skills/<name>/references/<topic>.md` when it grows beyond that.
+7. New skills must ship eval cases at `evals/<skill>.yaml` (3–5 cases covering `should_trigger`, `should_not_trigger`, `ambiguous`).
+8. Run `bash scripts/validate-skills.sh` and confirm it exits 0.
+
+### Naming
+
+For NEW skills, prefer gerund form (`authoring-…`, `analyzing-…`, `onboarding-…`). Existing skill names are frozen — do not rename to avoid breaking installs.
+
+### References location
+
+Reference docs cited by exactly one skill live under `skills/<name>/references/`. Cross-cutting references (currently only `sent-glossary.md`) live at top-level `references/`.
 
 ## Standard Skill Anatomy
 
@@ -74,7 +83,7 @@ Equivalent headings (`Workflow`, `How It Works`, `Core Process`) are fine when t
 - Don't copy carrier (Meta, TCR, Google RBM) docs verbatim — link to them. Those docs update frequently; mirroring rots quickly.
 - Don't create supporting files unless content exceeds ~100 lines or you ship runnable scripts.
 - Don't create an empty `scripts/` directory just to match another skill — only add `scripts/` when the skill actually ships executables.
-- Don't put reference material inside skill directories — `references/` is at the repo root.
+- Don't put single-skill reference material at the top-level `references/` — it belongs in `skills/<name>/references/`. Only cross-cutting references (currently `sent-glossary.md`) live at the repo root.
 - Don't add skills that restate engineering best practices that aren't channel/Sent-specific. Generic engineering skills belong in repos like [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills); this repo is product-domain only.
 
 ## Reporting Issues

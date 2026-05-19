@@ -1,0 +1,1 @@
+https://api-dev.sent.dm/swagger/v3/swagger.json

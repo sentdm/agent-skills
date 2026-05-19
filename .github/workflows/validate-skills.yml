@@ -8,14 +8,20 @@ on:
   pull_request:
     paths:
       - 'skills/**'
+      - 'references/**'
+      - '*.md'
       - 'scripts/validate-skills.sh'
       - '.github/workflows/validate-skills.yml'
+      - '.markdown-link-check.json'
   push:
     branches: [main]
     paths:
       - 'skills/**'
+      - 'references/**'
+      - '*.md'
       - 'scripts/validate-skills.sh'
       - '.github/workflows/validate-skills.yml'
+      - '.markdown-link-check.json'
 
 permissions:
   contents: read
@@ -27,3 +33,18 @@ jobs:
       - uses: actions/checkout@v4
       - name: Run validator
         run: bash scripts/validate-skills.sh
+
+  link-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check markdown links
+        uses: gaurav-nelson/github-action-markdown-link-check@v1
+        with:
+          use-quiet-mode: 'yes'
+          use-verbose-mode: 'yes'
+          check-modified-files-only: 'no'
+          config-file: '.markdown-link-check.json'
+          folder-path: 'skills, references'
+          file-extension: '.md'
+          file-path: 'README.md, CLAUDE.md, CONTRIBUTING.md, AGENTS.md, CODE_OF_CONDUCT.md'

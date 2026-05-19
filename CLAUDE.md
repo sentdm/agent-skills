@@ -10,13 +10,30 @@ This is the **sent-skills** plugin: a Claude Code plugin distribution of agent s
 
 ```
 skills/           → SKILL.md files (one per domain skill, spanning SMS/WhatsApp/RCS)
-references/       → Supplementary docs cited by SKILL.md files
+  <name>/
+    ├── SKILL.md
+    ├── references/   ← per-skill reference docs (resolved relative to SKILL.md)
+    └── scripts/      ← per-skill Python utilities (stdlib only)
+references/       → Cross-cutting docs only (currently: sent-glossary.md)
 .claude/commands/ → Slash commands (thin shims that invoke skills)
 .claude-plugin/   → plugin.json + marketplace.json
 docs/             → Authoring + setup guides
 scripts/          → Repo tooling (validator)
 .github/          → Issue + PR templates, CI
 ```
+
+## Command ↔ skill mapping
+
+| Slash command | Skill |
+|---|---|
+| `/mdr-analyze` | `messaging-performance-analyzer` |
+| `/rcs-onboard` | `rcs-agent-onboarding` |
+| `/sender-plan` | `sender-profile-architect` |
+| `/sms-register` | `sms-10dlc-registration` |
+| `/template-ui` | `template-builder-ui` |
+| `/waba-auth` | `waba-embedded-signup` |
+| `/waba-template` | `waba-template-author` |
+| `/sent` | `sent` (meta-dispatcher) |
 
 ## Authoring Rules (apply when adding or editing skills)
 
@@ -26,6 +43,10 @@ scripts/          → Repo tooling (validator)
 - Keep `SKILL.md` ≤ 500 lines. Move details to `references/<topic>.md`.
 - Cross-skill references use the **skill name** (`sent-skills:waba-template-author`), not file paths.
 - Don't duplicate Meta / TCR / Google RBM docs — link them. Don't restate generic engineering best practices — those belong in lifecycle skill repos.
+
+Reference paths in a SKILL.md are resolved **relative to the SKILL.md file**, not the repo root. `references/foo.md` in skill X means `skills/X/references/foo.md`.
+
+Per-skill scripts live under `skills/<name>/scripts/` and are Python 3.11+, stdlib-only. Invoke via `python skills/<name>/scripts/<script>.py` from the repo root. Each script must ship paired `good.json`/`bad.json` fixtures.
 
 ## Validator
 

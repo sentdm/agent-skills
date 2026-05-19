@@ -51,7 +51,7 @@ Run:
 /sent
 ```
 
-The dispatcher should list the five domain skills and route by intent.
+The dispatcher should list the seven domain skills and route by intent.
 
 ## First Task
 
@@ -76,8 +76,10 @@ Use `/context` if you need to confirm which plugin or skill files are currently 
 
 ## Where to Go Next
 
-- [`sent-skills:waba-template-author`](../skills/waba-template-author/SKILL.md) for template authoring, category review, and rejection analysis.
-- [`sent-skills:messaging-performance-analyzer`](../skills/messaging-performance-analyzer/SKILL.md) for MDR, delivery reports, and funnel leak analysis.
-- [`sent-skills:sender-profile-architect`](../skills/sender-profile-architect/SKILL.md) for Sender Profile tenancy and webhook routing.
-- [`sent-skills:template-builder-ui`](../skills/template-builder-ui/SKILL.md) for tenant-facing template builder workflows.
+- [`sent-skills:sms-10dlc-registration`](../skills/sms-10dlc-registration/SKILL.md) for TCR brand + campaign registration and 10DLC throughput debugging.
+- [`sent-skills:waba-template-author`](../skills/waba-template-author/SKILL.md) for WhatsApp template authoring, category review, and rejection analysis.
 - [`sent-skills:waba-embedded-signup`](../skills/waba-embedded-signup/SKILL.md) for Meta Embedded Signup, OAuth, and `config_id` debugging.
+- [`sent-skills:rcs-agent-onboarding`](../skills/rcs-agent-onboarding/SKILL.md) for RBM agent creation, verification, and SMS fallback strategy.
+- [`sent-skills:messaging-performance-analyzer`](../skills/messaging-performance-analyzer/SKILL.md) for unified Message Delivery Report analysis across SMS, WhatsApp, and RCS.
+- [`sent-skills:sender-profile-architect`](../skills/sender-profile-architect/SKILL.md) for Sender Profile tenancy and cross-channel webhook routing.
+- [`sent-skills:template-builder-ui`](../skills/template-builder-ui/SKILL.md) for the tenant-facing WhatsApp template builder workflow.

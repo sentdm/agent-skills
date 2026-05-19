@@ -1,6 +1,6 @@
 ---
 name: New skill proposal
-about: Propose a WABA-domain skill before opening an implementation PR
+about: Propose a Sent-domain skill (SMS / WhatsApp / RCS) before opening an implementation PR
 title: "[Skill Proposal]: "
 labels: enhancement
 assignees: ""
@@ -8,7 +8,7 @@ assignees: ""
 
 ## Proposed Name
 
-Use kebab case, for example `waba-policy-reviewer`.
+Use kebab case, for example `sms-shortcode-provisioning` or `waba-policy-reviewer`.
 
 ## One-Line Description
 
@@ -26,9 +26,9 @@ List the words users would naturally type when this skill should activate.
 
 Which current skill is closest, and why is this not just an edit to that skill?
 
-## Why This Is WABA-Domain
+## Why This Is Sent-Domain (SMS / WhatsApp / RCS)
 
-Explain why this belongs in `sent-skills` instead of a generic engineering lifecycle skill collection.
+Explain why this belongs in `sent-skills` (a messaging-platform-domain skill collection) instead of a generic engineering lifecycle collection. Name the channel(s) it covers.
 
 ## Workflow Sketch
 

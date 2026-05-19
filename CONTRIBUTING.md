@@ -1,6 +1,6 @@
 # Contributing to Sent Agent Skills
 
-Thanks for your interest in contributing. This repo is a collection of WhatsApp Business API skills for AI coding agents, published as an MIT-licensed Claude Code plugin and conformant to the open [Agent Skills format](https://agentskills.io/).
+Thanks for your interest in contributing. This repo is a collection of messaging-platform skills (SMS, WhatsApp, RCS) for AI coding agents, published as an MIT-licensed Claude Code plugin and conformant to the open [Agent Skills format](https://agentskills.io/).
 
 By contributing, you agree that your contributions will be licensed under the MIT License.
 
@@ -10,7 +10,7 @@ Every skill must be:
 
 - **Specific** — actionable steps, not vague advice. "Run `bash scripts/validate-skills.sh`" beats "verify the skill is valid."
 - **Verifiable** — clear exit criteria. Every checkbox in the `## Verification` section should have evidence (script output, webhook payload, screenshot).
-- **Battle-tested** — based on actual WABA engineering, not theoretical ideals or restatements of Meta's docs.
+- **Battle-tested** — based on actual carrier / Meta / Google RBM engineering, not theoretical ideals or restatements of the platforms' docs.
 - **Minimal** — only the content needed to guide the agent correctly. If removing a section wouldn't change behavior, remove it.
 
 ## Adding a New Skill
@@ -23,7 +23,7 @@ Every skill must be:
    - Be ≤ 1024 characters
    - Start with what the skill does in third person ("Analyzes…", "Designs…", "Implements…")
    - Include at least one explicit "Use when …" trigger condition
-   - Include the trigger phrases users actually say ("MDR", "embedded signup", "template category")
+   - Include the trigger phrases users actually say ("10DLC", "TCR", "RBM agent", "MDR", "embedded signup", "template category")
 6. Body stays ≤ 500 lines. Push detail to `references/<name>.md` when it grows beyond that.
 7. Run `bash scripts/validate-skills.sh` and confirm it exits 0.
 
@@ -71,17 +71,17 @@ Equivalent headings (`Workflow`, `How It Works`, `Core Process`) are fine when t
 ## Things Not to Do
 
 - Don't duplicate content between skills — reference the other skill by name (`See sent-skills:waba-template-author`) instead.
-- Don't copy Meta's docs verbatim — link to them. Meta updates frequently; mirroring rots quickly.
+- Don't copy carrier (Meta, TCR, Google RBM) docs verbatim — link to them. Those docs update frequently; mirroring rots quickly.
 - Don't create supporting files unless content exceeds ~100 lines or you ship runnable scripts.
 - Don't create an empty `scripts/` directory just to match another skill — only add `scripts/` when the skill actually ships executables.
 - Don't put reference material inside skill directories — `references/` is at the repo root.
-- Don't add skills that restate engineering best practices that aren't WABA-specific. Generic engineering skills belong in repos like [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills); this repo is product-domain only.
+- Don't add skills that restate engineering best practices that aren't channel/Sent-specific. Generic engineering skills belong in repos like [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills); this repo is product-domain only.
 
 ## Reporting Issues
 
 Open an issue if:
-- A skill gives incorrect or outdated guidance (Meta's API changed, the policy changed)
-- A WABA workflow is missing coverage
+- A skill gives incorrect or outdated guidance (a carrier API changed, Meta policy changed, TCR vetting changed, Google RBM verification process changed)
+- A channel-specific workflow is missing coverage
 - Cross-skill references are inconsistent
 
 Issue templates live in `.github/ISSUE_TEMPLATE/`.
@@ -94,4 +94,4 @@ Issue templates live in `.github/ISSUE_TEMPLATE/`.
 
 ## Code of Conduct
 
-This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). Reports of unacceptable behavior go to `community@sent.example` (replace with the real address before publishing).
+This project follows the [Contributor Covenant](./CODE_OF_CONDUCT.md). Reports of unacceptable behavior go to the maintainers via GitHub Issues marked `conduct` or to the contact listed in [`CODE_OF_CONDUCT.md`](./CODE_OF_CONDUCT.md).

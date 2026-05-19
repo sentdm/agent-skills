@@ -4,14 +4,14 @@ Repo-level instructions for Claude Code working inside this repository.
 
 ## Project
 
-This is the **sent-skills** plugin: a Claude Code plugin distribution of WhatsApp Business API agent skills. Skills are MIT-licensed, conformant to the [open Agent Skills format](https://agentskills.io/), and live under `skills/`.
+This is the **sent-skills** plugin: a Claude Code plugin distribution of agent skills for [Sent](https://sent.dm) — the unified messaging platform for **SMS, WhatsApp, and RCS**. Skills are MIT-licensed, conformant to the [open Agent Skills format](https://agentskills.io/), and live under `skills/`.
 
 ## Layout
 
 ```
-skills/           → 5 SKILL.md files (one per domain skill)
+skills/           → SKILL.md files (one per domain skill, spanning SMS/WhatsApp/RCS)
 references/       → Supplementary docs cited by SKILL.md files
-.claude/commands/ → 6 slash commands (thin shims that invoke skills)
+.claude/commands/ → Slash commands (thin shims that invoke skills)
 .claude-plugin/   → plugin.json + marketplace.json
 docs/             → Authoring + setup guides
 scripts/          → Repo tooling (validator)
@@ -25,7 +25,7 @@ scripts/          → Repo tooling (validator)
 - `name` is lowercase + hyphens + digits only, ≤ 64 chars, must equal the directory name, and must not be `anthropic` or `claude`.
 - Keep `SKILL.md` ≤ 500 lines. Move details to `references/<topic>.md`.
 - Cross-skill references use the **skill name** (`sent-skills:waba-template-author`), not file paths.
-- Don't duplicate Meta's docs — link them. Don't restate generic engineering best practices — those belong in lifecycle skill repos.
+- Don't duplicate Meta / TCR / Google RBM docs — link them. Don't restate generic engineering best practices — those belong in lifecycle skill repos.
 
 ## Validator
 
@@ -42,11 +42,11 @@ Exits 0 on success. Checks frontmatter presence, name regex + directory match, d
 
 ## Boundaries
 
-- **Always:** keep skills product-domain (WhatsApp Business API). Use the references directory for supplementary detail.
+- **Always:** keep skills product-domain — the messy bits of operating SMS (10DLC/TCR), WhatsApp (WABA, Meta policy), and RCS (RBM, Google verification) on Sent. Use `references/` for supplementary detail.
 - **Always:** match the addyosmani / Anthropic recommended anatomy (Overview, When to Use, Workflow, Common Rationalizations, Red Flags, Verification) — equivalent headings are fine.
 - **Never:** add a skill that's generic engineering advice (those belong in lifecycle repos like [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)).
-- **Never:** mirror Meta's API docs inside SKILL.md — link to them so the skill stays small and current.
-- **Never:** commit secrets, tokens, or `config_id` values to references — those are illustrative only.
+- **Never:** mirror carrier or Meta API docs inside SKILL.md — link to them so the skill stays small and current.
+- **Never:** commit secrets, tokens, `config_id`, TCR campaign IDs, or RBM agent IDs to references — those are illustrative only.
 
 ## When working in this repo
 

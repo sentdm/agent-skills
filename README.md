@@ -1,18 +1,18 @@
 # Sent Agent Skills
 
-**Production-grade agent skills for WhatsApp Business API builders.**
+**Production-grade agent skills for SMS, WhatsApp, and RCS builders on [Sent](https://sent.dm).**
 
-A Claude Code plugin that packages domain skills for the messy parts of building on the WhatsApp Business Platform — template authoring and classification, delivery-report analysis, multi-tenant Sender Profile architecture, the tenant template-builder UI, and Meta Embedded Signup.
+A Claude Code plugin that packages domain skills for the messy parts of running multi-channel business messaging on Sent — SMS 10DLC/TCR registration, WhatsApp template authoring and classification, RCS RBM agent onboarding, delivery-report analysis, multi-tenant Sender Profile architecture, the tenant template-builder UI, and Meta Embedded Signup.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Skills](https://img.shields.io/badge/skills-5-blue)](#skills)
+[![Skills](https://img.shields.io/badge/skills-7-blue)](#skills)
 [![Spec](https://img.shields.io/badge/spec-agentskills.io-purple)](https://agentskills.io/)
 
 ---
 
 ## What this is
 
-Five domain skills, six slash commands, and the references they cite — packaged as an installable Claude Code plugin. Each skill encodes the decisions a senior WABA engineer makes in their head so an agent (Claude, Cursor, Gemini CLI, OpenCode, …) follows the same playbook consistently.
+Seven domain skills, matching slash commands, and the references they cite — packaged as an installable Claude Code plugin. Each skill encodes the decisions a senior messaging engineer makes in their head so an agent (Claude, Cursor, Gemini CLI, OpenCode, …) follows the same playbook consistently across all three channels Sent supports.
 
 These skills are **product-domain**, not engineering-lifecycle. They compose cleanly with general engineering skills (e.g. [addyosmani/agent-skills](https://github.com/addyosmani/agent-skills)) — install both for full coverage.
 
@@ -20,13 +20,15 @@ These skills are **product-domain**, not engineering-lifecycle. They compose cle
 
 ## Skills
 
-| Skill | Use it when… | Slash command |
-|---|---|---|
-| [`waba-template-author`](./skills/waba-template-author/SKILL.md) | Drafting a template; classifying utility vs marketing; investigating a rejection | `/waba-template` |
-| [`messaging-performance-analyzer`](./skills/messaging-performance-analyzer/SKILL.md) | Investigating an MDR drop; finding the leak in a sales funnel | `/mdr-analyze` |
-| [`sender-profile-architect`](./skills/sender-profile-architect/SKILL.md) | Designing tenancy around Sender Profiles; webhook routing; rate limits | `/sps-plan` |
-| [`template-builder-ui`](./skills/template-builder-ui/SKILL.md) | Building the tenant-facing template editor; live preview; submission feedback | `/template-ui` |
-| [`waba-embedded-signup`](./skills/waba-embedded-signup/SKILL.md) | Integrating Meta Embedded Signup; debugging a stuck signup | `/waba-auth` |
+| Skill | Channel | Use it when… | Slash command |
+|---|---|---|---|
+| [`sender-profile-architect`](./skills/sender-profile-architect/SKILL.md) | all | Designing tenancy around Sender Profiles; webhook routing; rate limits across channels | `/sender-plan` |
+| [`messaging-performance-analyzer`](./skills/messaging-performance-analyzer/SKILL.md) | all | Investigating a delivery drop; finding the leak in a sales funnel across SMS/WhatsApp/RCS | `/mdr-analyze` |
+| [`sms-10dlc-registration`](./skills/sms-10dlc-registration/SKILL.md) | SMS | Registering a brand + campaign with The Campaign Registry; debugging a TCR rejection | `/sms-register` |
+| [`waba-template-author`](./skills/waba-template-author/SKILL.md) | WhatsApp | Drafting a template; classifying utility vs marketing; investigating a rejection | `/waba-template` |
+| [`waba-embedded-signup`](./skills/waba-embedded-signup/SKILL.md) | WhatsApp | Integrating Meta Embedded Signup; debugging a stuck signup | `/waba-auth` |
+| [`rcs-agent-onboarding`](./skills/rcs-agent-onboarding/SKILL.md) | RCS | Creating + verifying an RBM agent with Google; defining agent capabilities + fallback | `/rcs-onboard` |
+| [`template-builder-ui`](./skills/template-builder-ui/SKILL.md) | WhatsApp | Building the tenant-facing template editor; live preview; submission feedback | `/template-ui` |
 
 Plus `/sent` — a meta dispatcher that lists the skills and routes by intent.
 
@@ -69,8 +71,9 @@ Repeat for each skill you want available.
 ### Verify the install
 
 In a fresh session:
-1. Run `/sent` — the dispatcher should list the five skills.
+1. Run `/sent` — the dispatcher should list every skill.
 2. Ask *"How do I classify a shipping-update template?"* — the `waba-template-author` skill should auto-activate.
+3. Ask *"How do I register a 10DLC campaign?"* — the `sms-10dlc-registration` skill should auto-activate.
 
 ---
 
@@ -104,7 +107,7 @@ In short:
 ```
 .claude-plugin/    Plugin + marketplace manifests
 .claude/commands/  Slash command shims
-skills/            Five domain skills (one SKILL.md per directory)
+skills/            Seven domain skills (one SKILL.md per directory)
 references/        Supplementary docs cited by the skills
 docs/              Authoring + setup guides
 scripts/           Repo tooling (skill validator)

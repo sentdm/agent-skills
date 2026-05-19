@@ -1,7 +1,7 @@
 {
   "name": "sent-skills",
-  "description": "WhatsApp Business API skills for builders on Sent — templates, delivery analytics, multi-tenancy, embedded signup.",
-  "version": "0.1.0",
+  "description": "Agent skills for builders on Sent — SMS (10DLC/TCR), WhatsApp (WABA, templates, embedded signup), and RCS (RBM). Covers sender profiles, delivery analytics, multi-tenancy, and channel-specific compliance.",
+  "version": "0.2.0",
   "author": { "name": "Sent" },
   "homepage": "https://github.com/sentdm/agent-skills",
   "repository": "https://github.com/sentdm/agent-skills",

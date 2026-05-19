@@ -6,3 +6,7 @@ node_modules/
 .claude/.simplify-ignore-cache/
 .claude/sdd-cache/
 *.zip
+
+# Working / planning notes (per-author, not part of the skill collection)
+_plans/
+implementation-notes.html

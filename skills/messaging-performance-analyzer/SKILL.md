@@ -1,105 +1,143 @@
 ---
 name: messaging-performance-analyzer
-description: Analyzes WhatsApp Business API Message Delivery Reports (MDRs) to surface failure patterns and bottlenecks across a sales or notification funnel. Use when a user mentions "MDR", "delivery report", "why are my messages failing", "delivered vs read rate", "drop in delivery", or wants to find where leads drop off in a sequence. Use when investigating a sudden change in delivery rate, a specific status-code spike, or a tenant complaining their messages "aren't going through". Provides a funnel framing, status-code triage, and segmentation guidance.
+description: Analyzes Sent's unified Message Delivery Reports (MDRs) across SMS, WhatsApp, and RCS to surface failure patterns and bottlenecks in a sales or notification funnel. Use when a user mentions "MDR", "delivery report", "why are my messages failing", "delivered vs read rate", "drop in delivery", or wants to find where leads drop off in a sequence. Use when investigating a sudden delivery-rate change, a specific status-code spike (carrier reject, Meta error code, RBM capability failure), or a tenant complaining their messages "aren't going through". Use when comparing channel performance (SMS vs WhatsApp vs RCS with fallback) for the same audience. Provides a channel-aware funnel framing, per-channel status-code triage, and segmentation guidance.
 ---
 
 # Messaging Performance Analyzer
 
 ## Overview
 
-A Message Delivery Report (MDR) is the per-message status webhook Meta sends as a message moves through `sent → delivered → read → replied` — and the failure path with specific error codes when things go wrong. Raw MDRs are noisy; the value is in the funnel shape and where it breaks. This skill is the analyst's playbook: frame the funnel, slice the data, triage status codes, and produce an actionable diagnosis instead of vibes.
+A Message Delivery Report (MDR) is Sent's unified per-message status stream — what each channel pushes back as a message moves through `sent → delivered → read → replied` and what each channel pushes when something fails. Each upstream provider speaks its own dialect (carriers for SMS, Meta for WhatsApp, Google RBM for RCS), and Sent normalizes them; this skill is the analyst's playbook for reading the normalized stream, slicing it, and producing an actionable diagnosis instead of vibes.
+
+The skill is channel-aware because the meaningful funnel stages and the failure modes differ by channel. Don't analyze SMS and WhatsApp on the same axes.
 
 ## When to Use
 
 Use when:
-- A user complains "delivery is bad" or "messages aren't going through"
-- A specific template or tenant has a sudden delivery drop
+- A user complains "delivery is bad" or "messages aren't going through" on any channel
+- A specific template / campaign / agent or tenant has a sudden delivery drop
 - A sales sequence is underperforming and the team wants to know which step is leaking
-- You see a spike in a particular WABA error code and need to interpret it
-- You need to compare delivery health across tenants, countries, or templates
+- You see a spike in a particular status / error code (carrier reject, Meta 131xxx, RBM capability failure) and need to interpret it
+- A tenant is using RCS-with-SMS-fallback and you need to know how much of the volume actually landed on RCS vs fell back
+- You need to compare delivery health across tenants, countries, channels, or templates
 
 Do **not** use for:
-- Writing or classifying templates — use `waba-template-author`
-- Provisioning new senders — use `sender-profile-architect`
+- Writing or classifying WhatsApp templates — use `waba-template-author`
+- Provisioning new senders — use `sender-profile-architect`, `sms-10dlc-registration`, `waba-embedded-signup`, or `rcs-agent-onboarding`
 - Authoring the dashboard UI itself — that's product work, not analysis
 
-## The Funnel Frame
+## The Funnel Frame (channel-aware)
 
-Every WABA messaging analysis starts here:
+Every analysis starts here, but the *stages that matter* depend on the channel.
+
+### SMS funnel
+
+```
+Submitted   → message accepted by Sent
+   │
+Sent        → handed off to the carrier
+   │
+Delivered   → carrier acknowledged delivery to the handset
+   │
+Replied     → recipient responded (if any)
+```
+
+- No native "read" signal on SMS — `read` doesn't exist.
+- "Delivered" is *carrier-reported*; some carriers don't return granular delivery receipts (DLRs), so the funnel ends at "Sent" for them. Note the carrier when you cite a number.
+
+### WhatsApp funnel
 
 ```
 Submitted   → message accepted by Cloud API
    │
-Sent        → Meta has handed it off toward WhatsApp's network
+Sent        → Meta has dispatched toward WhatsApp's network
    │
 Delivered   → recipient's device acknowledged receipt
    │
-Read        → recipient opened the message (only if read receipts are on)
+Read        → recipient opened (only if read receipts are on)
    │
 Replied / CTA → recipient took the desired action
 ```
 
-A healthy WABA template typically sees ≥95% sent→delivered, 60-85% delivered→read (heavy regional variance), and single-digit-to-low-double-digit read→reply for cold sequences.
+Read receipts can be turned off by the recipient regardless of region; treat read-rate as advisory.
 
-**Common funnel shapes and what they mean:**
-- Sent high, delivered low → capability or recipient-quality issue (errors 131005, 131026, 131047)
-- Delivered high, read low → opt-in friction, send-time mismatch, or template fatigue (per-recipient)
-- Read high, replied low → CTA problem, message length, or wrong audience — content issue not delivery issue
+### RCS funnel
+
+```
+Capability  → recipient handset confirmed RCS-capable
+   │  (no  → fallback path; counts as a different funnel)
+   │
+Submitted   → Sent accepted the message for RCS
+   │
+Sent        → handed to Google RBM
+   │
+Delivered   → carrier confirmed delivery
+   │
+Read        → recipient opened
+   │
+Reply / Action → recipient tapped a suggested action or replied
+```
+
+- The **capability check** is the unique RCS stage. Most RCS funnel leakage shows up here, *not* in delivery.
+- If the Sender Profile's fallback policy is "SMS", treat the SMS leg as a separate funnel and combine for tenant-facing rollups only.
 
 ## Workflow
 
-1. **Pin the question.** "Why did delivery drop today?" is answerable. "How are our messages doing?" isn't. Push the user toward a comparable cohort (template × tenant × country × day).
-2. **Define the window and the cohort.** Same template, same country, last 7 days vs prior 7 days. Avoid mixing templates with different categories — utility and marketing have different baselines.
-3. **Compute the funnel per stage.** For each cohort, count distinct `wamid` at each status. Use the *latest* status per message; don't double-count a message that went sent→delivered→failed.
-4. **Find the broken stage.** The biggest absolute drop between adjacent stages — relative to the baseline — is the bottleneck.
-5. **Triage the error codes at that stage.** Group failed messages by `errors[0].code`. The top 1-2 codes usually explain ≥80% of failures. Map each code to a root cause using `references/mdr-status-codes.md`.
-6. **Segment if needed.** If a status code dominates only for one country or one phone number ID, the fix is scoped to that segment (recipient quality, sender health, or template per-country issue). If it's across the board, look at template/account-level causes (paused template, account flagged, tier downgrade).
-7. **Report:** broken stage, top status codes, hypothesis, suggested fix or follow-up data pull. Quantify (`12% drop, ~4,200 messages, 87% explained by error 131047`), don't qualify.
+1. **Pin the question.** "Why did delivery drop today?" is answerable. "How are our messages doing?" isn't. Push the user toward a comparable cohort (channel × template-or-campaign × country × time window × tenant).
+2. **Pick the channel-appropriate funnel.** SMS, WhatsApp, and RCS each have different meaningful stages; never blend them on one chart.
+3. **Define the window and the cohort.** Same channel, same template/campaign, same country, last 7 days vs prior 7 days. For WhatsApp, never mix template categories — utility and marketing have different baselines.
+4. **Compute the funnel per stage.** Count distinct message IDs at each status (`carrier_message_id` for SMS, `wamid` for WhatsApp, `messageId` for RCS). Use the *latest* status per message; don't double-count a `sent → delivered → failed` trajectory.
+5. **Find the broken stage.** The biggest absolute drop between adjacent stages — relative to the baseline — is the bottleneck.
+6. **Triage status codes at that stage.** Group failed messages by the channel's error field. The top 1-2 codes usually explain ≥80% of failures. Map each code to a root cause using the channel section in `references/mdr-status-codes.md`.
+7. **Segment if needed.** If a code dominates only for one country, one carrier (SMS), one phone-number-id (WhatsApp), or one capability profile (RCS), the fix is scoped to that segment. If it's across the board, look at template / account / agent-level causes.
+8. **Report:** broken stage, top status codes, hypothesis, suggested fix or follow-up data pull. Quantify (`12% drop, ~4,200 messages, 87% explained by carrier filter X` or `error 131047`), don't qualify.
 
-## Status-Code Triage (top offenders)
+## Status-Code Triage Pointers (by channel)
 
-| Code | Meaning | Typical root cause |
+| Channel | What you're triaging | Common top offenders |
 |---|---|---|
-| `131005` | Access denied / capability error | App permission revoked, BSP revoked the phone number |
-| `131026` | Recipient cannot receive | Number not on WhatsApp, blocked, or wrong country format |
-| `131047` | Re-engagement required | 24-hour window expired and template not sent — send a template to re-open |
-| `131051` | Unsupported message type | Sending a media type the recipient's app can't render |
-| `131056` | Pair rate-limit (sender↔recipient) | Too many messages to same recipient in a short window |
-| `132000` | Template paused / disabled | Template was paused due to quality rating; revise or use a backup |
-| `133000` | Account restriction | Account-level limit hit; usually a tier or messaging-limit issue |
+| **SMS** | Carrier rejection, opt-out, invalid number | Carrier filter (T-Mobile / AT&T / Verizon), TCR campaign throttle, STOP keyword, landline / invalid number |
+| **WhatsApp** | Meta error code in `errors[0].code` | `131005`, `131026`, `131047`, `131048`, `131056`, `132000`, `133016`, `133006` |
+| **RCS** | Capability mismatch, agent state, fallback engagement | Recipient not RCS-capable, agent not launched in that carrier, suggested-action timeout, fallback fired |
 
-The full enum lives in `references/mdr-status-codes.md`.
+The full enums (per channel) live in `references/mdr-status-codes.md`.
 
 ## Common Rationalizations
 
 | Rationalization | Reality |
 |---|---|
-| "Delivery dropped, so the problem is delivery." | The MDR `failed` status often masks a content or account-level cause. Always look at the error code, not just the status. |
-| "Read rates are low — the template is broken." | Read receipts are off by default in many regions. Compare like-for-like and check whether the read-rate is structurally lower for that country. |
-| "All these failures are 131026, so they're bad numbers — nothing we can do." | High 131026 usually means the contact list isn't being validated upstream. The fix is in onboarding, not messaging. |
-| "Let me look at all templates in one chart." | Aggregating across categories hides regressions. Always slice by template first. |
-| "Sample size is fine, I'll trust the rate." | A 90% delivery rate on 50 messages tells you nothing. Require ≥1,000 per cohort before drawing conclusions on small deltas. |
+| "Delivery dropped, so the problem is delivery." | The `failed` status usually masks a content, capability, or account-level cause. Always look at the channel's error code, not just the status. |
+| "Read rates are low — the template is broken." | WhatsApp read receipts are off in many regions; RCS read varies by handset. Compare like-for-like and check whether the read-rate is structurally lower in that segment. |
+| "All these failures are 131026, so they're bad numbers — nothing we can do." | High 131026 (WhatsApp "not on WhatsApp") usually means the contact list isn't being validated upstream. The fix is in onboarding, not messaging. |
+| "Let me look at all channels in one chart." | Blending SMS, WhatsApp, and RCS on one funnel hides everything important. Always slice by channel first. |
+| "RCS fallback to SMS is the same as RCS delivery." | The fallback is a *different funnel*. Counting fallback as RCS delivery inflates RCS performance and hides the capability problem. |
+| "Sample size is fine, I'll trust the rate." | A 90% delivery rate on 50 messages tells you nothing. Require a meaningful absolute count before drawing conclusions on small deltas — Sent's internal heuristic is ≥1,000 per cohort. |
 
 ## Red Flags
 
-- An analysis without a defined cohort (template × country × time window)
+- An analysis without a defined cohort (channel × template-or-campaign × country × time window)
 - Comparing yesterday vs today without a baseline week
 - Quoting percentages without absolute counts
-- Conflating "failed" and "not delivered yet" — failed has an `errors[]` array; pending doesn't
+- Conflating "failed" and "not delivered yet" — failed has an error field; pending doesn't
 - A report that names a problem but no specific message IDs / examples to inspect
-- "It's broken" without a top error code
+- "It's broken" without a top error code per channel
+- RCS delivery numbers that don't separately call out SMS-fallback volume
 
 ## Verification
 
-A good MDR analysis ends with:
-- [ ] Cohort defined explicitly (template, country, window, tenant)
+A good analysis ends with:
+- [ ] Channel named explicitly
+- [ ] Cohort defined explicitly (template/campaign, country, window, tenant, channel)
 - [ ] Funnel computed at each stage with both rates and absolute counts
 - [ ] Broken stage identified with the magnitude of the drop
-- [ ] Top error codes named with their root-cause mapping
-- [ ] One concrete next step (fix, deeper pull, or escalation to BSP / Meta support)
+- [ ] Top error codes named with their root-cause mapping (channel-appropriate)
+- [ ] For RCS, fallback volume reported separately
+- [ ] One concrete next step (fix, deeper pull, or escalation to the relevant carrier / Meta / Google support)
 - [ ] Reproducible query / script — not a hand-computed number
 
 ## Related Skills
 
-- `waba-template-author` — if the diagnosis is "template content" or "wrong category"
-- `sender-profile-architect` — if the diagnosis is account-tier or sender-quality
+- `waba-template-author` — if the diagnosis is "WhatsApp template content" or "wrong category"
+- `sms-10dlc-registration` — if the diagnosis is TCR vetting score / campaign throttle / brand mis-classification
+- `rcs-agent-onboarding` — if the diagnosis is "agent not launched in that carrier" or capability mismatch
+- `sender-profile-architect` — if the diagnosis is account-tier / sender-quality / multi-channel state drift

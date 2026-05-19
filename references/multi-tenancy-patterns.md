@@ -1,163 +1,86 @@
-# Multi-Tenancy Patterns for WABA Apps — Reference
+# Multi-Tenancy Patterns for Messaging Apps on Sent — Reference
 
-Supporting reference for `sender-profile-architect`. Patterns for isolation,
-data modeling, and operational concerns specific to WhatsApp Business API
-platforms.
+Supporting reference for `sender-profile-architect`. Patterns that are *specific to messaging workloads* on Sent — high write volume, webhook fan-in from three channels, and carrier / Meta / Google compliance constraints. Generic multi-tenant SaaS theory is covered exhaustively elsewhere; this doc only captures what changes when SMS, WhatsApp, and RCS are involved.
 
-## Three Models
+## What a Sender Profile owns
 
-### Pooled
+A Sender Profile is *one tenant's sending identity* across every channel that tenant uses. At minimum:
 
-One database, one set of services. Every tenant-scoped row carries `tenant_id`
-and `sps_id`. Queries are gated by an app-layer or DB-layer policy (RLS, view,
-or middleware) that enforces the tenant boundary.
+- One API key (the tenant authenticates as the profile)
+- Zero or one SMS sender — phone number(s) or short code, plus a TCR brand + campaign registration
+- Zero or one WhatsApp sender — a WABA, one or more phone numbers, a System User token
+- Zero or one RCS sender — an RBM agent with verified domains and a fallback policy
 
-**Strengths**
-- Low per-tenant cost (good for SaaS economics)
-- Instant onboarding — new tenant is a row, not infra
-- Single migration / deploy / monitoring story
-
-**Weaknesses**
-- Blast radius: a bad query or a leaked key affects all tenants
-- Noisy neighbor: one tenant's traffic burst impacts everyone
-- Data residency / compliance is harder to claim
-
-**When to choose:** default. Especially for SMB and mid-market tenants.
-
-### Siloed
-
-Per-tenant database or schema, possibly per-tenant compute. The tenant boundary
-is the database boundary.
-
-**Strengths**
-- Strong isolation; data residency / compliance is easy to claim
-- Noisy neighbor mitigated
-- Per-tenant migrations possible (rare upside in practice)
-
-**Weaknesses**
-- High operational cost — N databases to back up, patch, upgrade
-- Onboarding requires provisioning
-- Cross-tenant analytics is now a pipeline problem
-
-**When to choose:** enterprise tenants who are paying for it, or regulated
-verticals (healthcare, government) where you've committed to data isolation.
-
-### Hybrid (recommended for most platforms)
-
-Pooled compute, pooled SPS metadata, **siloed message-content storage** for
-tenants that pay for it or where the data is sensitive. The SPS table is the
-join point — `sps.storage_partition` points at the right storage backend.
-
-**Strengths**
-- Cheap default with an upsell path for isolation
-- Compliance story is plausible without N databases
-- Single application, multiple storage backends — possible if abstracted early
-
-**Cost:** the abstraction. You must commit to a storage interface that
-supports both partitions on day one. Retrofitting is painful.
-
-## The SPS Schema (sketch)
-
-```sql
-CREATE TABLE tenants (
-  id           uuid PRIMARY KEY,
-  name         text NOT NULL,
-  plan         text NOT NULL,
-  created_at   timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE sender_profiles (
-  id                  uuid PRIMARY KEY,
-  tenant_id           uuid NOT NULL REFERENCES tenants(id),
-  display_name        text NOT NULL,
-  meta_business_id    text,
-  waba_id             text UNIQUE,            -- one WABA per SPS
-  access_token        bytea,                  -- encrypted
-  state               text NOT NULL,          -- enum: provisioned, connecting, ...
-  state_updated_at    timestamptz NOT NULL DEFAULT now(),
-  last_meta_sync_at   timestamptz,
-  storage_partition   text NOT NULL DEFAULT 'default',
-  created_at          timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE TABLE phone_numbers (
-  id                    uuid PRIMARY KEY,
-  sps_id                uuid NOT NULL REFERENCES sender_profiles(id),
-  phone_number_id       text UNIQUE NOT NULL,   -- Meta's ID, the webhook key
-  display_phone_number  text NOT NULL,
-  verified_name         text,
-  quality_rating        text,
-  messaging_limit_tier  text,
-  registration_pin      bytea,                  -- encrypted
-  created_at            timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX idx_phone_numbers_phone_number_id ON phone_numbers (phone_number_id);
-CREATE INDEX idx_sender_profiles_tenant ON sender_profiles (tenant_id);
-```
-
-Notes:
-- `waba_id` is unique — one SPS per WABA. Multiple phone numbers per WABA are
-  the `phone_numbers` table.
-- `phone_number_id` is the lookup key for webhook routing.
-- Tokens and PINs are encrypted at rest, ideally with envelope encryption
-  (per-tenant DEK wrapped by a KMS-managed KEK).
+Each tenant may have multiple profiles (one per brand, region, or use case). The profile is the routing key everything else attaches to.
 
 ## Webhook Routing (the hot path)
 
-```
-1. POST /webhooks/whatsapp
-2. Verify X-Hub-Signature-256 against app secret
-3. Parse payload → extract entry[0].changes[0].value.metadata.phone_number_id
-4. Lookup: SELECT sps_id, tenant_id FROM phone_numbers WHERE phone_number_id = $1
-   (or Redis cache)
-5. Enqueue: queue.publish(`sps.${sps_id}`, payload)
-6. Return 200 within ~1s
-```
+Each channel pushes inbound events on its own stream with its own routing key. The job is to converge them on the right Sender Profile:
+
+| Channel | Inbound from | Routing key in the payload | Used to find |
+|---|---|---|---|
+| SMS | Carrier (via Sent) | Sender phone / short code + TCR campaign ID | the profile's SMS sender |
+| WhatsApp | Meta | WABA ID + `phone_number_id` | the profile's WhatsApp sender |
+| RCS | Google RBM (via Sent) | `agentId` | the profile's RCS sender |
+
+Whatever you use to look these up — cache, store, or service — the contract is the same: resolve the routing key, find the Sender Profile, enqueue per profile, ACK the webhook fast. Synchronous business logic in the webhook handler kills throughput because all three platforms retry on slow / 5xx responses (Meta times out around 15s, Google around 10s, carriers vary).
 
 Two failure modes to design out:
-- **Cold lookup**: a webhook arrives for a `phone_number_id` you've never seen
-  (e.g. tenant added a number in Meta Business Manager, not via your UI). Log,
-  return 200, alert ops — don't drop.
-- **Slow lookup**: DB latency spikes block ACK. Always have a Redis or
-  in-process LRU cache backed by the DB.
 
-## Rate-Limit Accounting
+- **Cold routing key.** A webhook arrives for a phone number, `phone_number_id`, or `agentId` that doesn't map to a known profile yet (the tenant added a number in Meta Business Manager out-of-band, or a TCR campaign moved between brands). Log, return 200, alert ops — don't drop the event.
+- **Slow routing-key lookup.** If lookups go to cold storage every time, they'll be the bottleneck under spike load. Cache aggressively, but back the cache with a durable store — pods that don't have the cache primed must still resolve correctly.
 
-| Layer | What's metered | Where to enforce |
+## Per-Channel Rate-Limit Accounting
+
+Limits exist at three layers on every channel. Track per-channel; bill at the profile.
+
+| Channel | Carrier / platform limit you must respect | Where it comes from |
 |---|---|---|
-| Meta phone-number tier (1k/10k/100k/unlimited per 24h) | Business-initiated conversations | Read from Meta API; persist on `phone_numbers.messaging_limit_tier`; alert at 80% |
-| Meta throughput (CPS) | Messages per second per phone | Token bucket per `phone_number_id`, sized to the tier |
-| Your per-tenant or per-SPS quota | Whatever you sell (messages/month, AI calls, etc.) | Token bucket per `sps_id`, persisted in Redis with periodic snapshot |
+| **SMS** | Campaign TPS per carrier (assigned after TCR vetting) | TCR + carrier reconciliation; periodic re-fetch |
+| **SMS** | Daily volume caps imposed by carriers | Carrier-specific; surfaced by Sent |
+| **WhatsApp** | Phone-number tier (1K / 10K / 100K / unlimited business-initiated conversations per 24h) | Meta — readable from the phone-number record |
+| **WhatsApp** | Cloud API throughput (CPS) | Meta-defined, tier-derived |
+| **RCS** | Agent QPS | Google RBM |
+| **All** | Your per-profile quota — whatever you actually sell | Your billing layer |
 
-Bill per SPS, not per tenant. A tenant with two SPSes has two meters.
+Bill against the Sender Profile, not the tenant — a tenant with three brands gets three meters.
 
-## Idempotency
+## Channel-Specific Idempotency
 
-Outbound message sends should be idempotent on `(sps_id, client_message_id)`.
-Persist this row before calling Meta — if the Meta call succeeds and your DB
-write fails, the next send retry would otherwise duplicate.
+Outbound message sends should be idempotent on the tuple `(sender profile, channel, client_message_id)`. Persist the intent to send *before* the upstream call — if the channel API succeeds but your write fails, a retry would otherwise duplicate.
 
-Inbound webhook events are idempotent on `wamid + status` — the same status
-event can arrive multiple times due to Meta retries. Use an upsert keyed on
-`(wamid, status)` for the message-events table.
+Inbound delivery events are idempotent on different natural keys per channel — coalesce accordingly:
 
-## Operational Patterns
+| Channel | Inbound event coalesces on |
+|---|---|
+| SMS | `(carrier_message_id, status)` |
+| WhatsApp | `(wamid, status)` |
+| RCS | `(messageId, status)` |
 
-- **State reconciliation job** — every N minutes, sample SPSes whose
-  `last_meta_sync_at` is stale and refresh state from Meta. Don't rely on
-  webhooks alone.
-- **Token rotation** — for System User tokens, rotate on a schedule (90 days)
-  via the Meta API. Persist the new token before discarding the old one.
-- **Tenant offboarding** — when a tenant churns, set their SPSes to a
-  `archived` state, unsubscribe the app from their WABA, and schedule
-  data deletion per your retention policy.
+## State Reconciliation (per channel)
 
-## Anti-Patterns to Avoid
+Don't rely on webhooks alone. Every channel can silently drift:
 
-- Keying messages by `tenant_id` only (lose the SPS dimension)
-- Storing tokens unencrypted because "it's just an internal DB"
-- Synchronous webhook processing (kills throughput at scale)
-- Sharing one System User token across SPSes (revocation now affects all of them)
-- Computing tenant data residency by application-level filtering when the
-  legal commitment is database-level isolation
+- **TCR / SMS** — campaign vetting score updates and carrier-level filtering changes do not always fire webhooks. Reconcile against TCR + carrier APIs on a schedule (daily for healthy campaigns, hourly when state was recently changing).
+- **WhatsApp** — phone-number quality rating and messaging tier change without webhooks. Re-fetch every few hours; alert on transitions.
+- **RCS** — agent launch state and carrier rollout status update silently. Re-fetch daily for `launched` agents and more often during initial verification rollout.
+
+Track when each channel was last reconciled so dashboards can show how stale each profile is.
+
+## Channel-Specific Anti-Patterns
+
+- **WhatsApp** — Sharing one Meta System User token across multiple Sender Profiles. Token revocation now disables every profile.
+- **SMS** — Reusing a TCR campaign across tenants. The campaign vetting score follows whoever the brand says it is — share at your peril.
+- **RCS** — Hardcoding the RBM agent into the application instead of attaching it to a Sender Profile. Multi-region or multi-brand tenants will need multiple agents and the code path forks.
+- **All** — Synchronous webhook processing. Throughput dies and the platforms retry aggressively.
+- **All** — Claiming "data residency" by application-level filtering when the legal commitment is storage-level isolation.
+
+## Tenant Offboarding
+
+When a tenant churns, run the per-channel teardown — not just a state flag:
+
+- **SMS** — deactivate the TCR campaign(s), release the phone number(s) per Sent's release flow.
+- **WhatsApp** — unsubscribe your app from the WABA, revoke the System User token.
+- **RCS** — unlaunch / suspend the RBM agent.
+
+Then mark the Sender Profile archived. Schedule message-content deletion per your retention policy.

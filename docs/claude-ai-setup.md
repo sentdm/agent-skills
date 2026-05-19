@@ -31,11 +31,13 @@ Package each skill separately:
 
 ```bash
 cd skills
+zip -r sms-10dlc-registration.zip sms-10dlc-registration/
 zip -r waba-template-author.zip waba-template-author/
+zip -r waba-embedded-signup.zip waba-embedded-signup/
+zip -r rcs-agent-onboarding.zip rcs-agent-onboarding/
 zip -r messaging-performance-analyzer.zip messaging-performance-analyzer/
 zip -r sender-profile-architect.zip sender-profile-architect/
 zip -r template-builder-ui.zip template-builder-ui/
-zip -r waba-embedded-signup.zip waba-embedded-signup/
 ```
 
 Upload each zip through the Skills UI. Keeping them separate preserves skill-level activation and makes updates easier.

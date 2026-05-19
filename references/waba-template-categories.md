@@ -5,8 +5,9 @@ policy plus practical mappings to common use cases. Authoritative source:
 [WhatsApp Business Platform > Message Templates](https://developers.facebook.com/docs/whatsapp/message-templates).
 
 > The Meta policy evolves frequently — verify the current rules in the official
-> docs before relying on edge cases. This reference captures stable patterns and
-> the boundaries that have been consistent through 2024–2026.
+> docs before relying on edge cases. This reference captures the stable patterns
+> and boundaries; assume any specific number or category boundary may have
+> changed since this file was written.
 
 ## The Three Categories
 
@@ -84,13 +85,13 @@ verification, account-recovery codes.
 - *Either* quick replies *or* CTA buttons, never both
 - Quick replies: up to 3, max 25 chars per label
 - CTAs: up to 2, types: `URL` or `PHONE_NUMBER`
-  - URL CTAs may include one trailing variable: `https://sent.example/orders/{{1}}`
+  - URL CTAs may include one trailing variable: `https://example.com/orders/{{1}}`
   - URL CTAs require an example URL for submission
 
 ## Submission Payload Shape (Cloud API)
 
 ```json
-POST /v20.0/{waba_id}/message_templates
+POST /v23.0/{waba_id}/message_templates
 {
   "name": "order_confirmation_v1",
   "language": "en_US",
@@ -117,8 +118,8 @@ POST /v20.0/{waba_id}/message_templates
         {
           "type": "URL",
           "text": "Track order",
-          "url": "https://sent.example/orders/{{1}}",
-          "example": ["https://sent.example/orders/A1029"]
+          "url": "https://example.com/orders/{{1}}",
+          "example": ["https://example.com/orders/A1029"]
         }
       ]
     }

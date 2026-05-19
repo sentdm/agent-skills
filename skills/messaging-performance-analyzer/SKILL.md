@@ -129,14 +129,17 @@ Use `sent-skills:sender-profile-architect` when the issue is tenant/profile isol
 
 Use `sent-skills:waba-template-author` or `sent-skills:template-builder-ui` when the root cause is WhatsApp template category, review status, template payload structure, or authoring workflow.
 
-## Suggested bundled references and scripts
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## Bundled references and scripts
 
 | File | Type | Purpose |
 |---|---|---|
 | `references/mdr-status-codes.md` | Lookup table | Normalize observed SMS, WhatsApp, and RCS provider errors without putting long code dictionaries in the skill body. |
-| `references/performance-diagnosis-playbook.md` | Worked examples | Show full examples for SMS compliance failure, WhatsApp template rejection, RCS fallback, and webhook ingestion failure. |
-| `scripts/analyze_sent_message_funnel.py` | Validation script | Load exported message/activity/webhook CSV or JSON, deduplicate by Sent `message_id`, and output stage counts by channel/profile/template. |
-| `scripts/compare_webhook_events.py` | Validation script | Compare Sent webhook event exports against customer ingestion logs to distinguish delivery failures from callback failures. |
+| `references/performance-diagnosis-playbook.md` | Worked examples | Decision tree for which signal to investigate first, channel-specific diagnostic patterns, cross-skill handoff matrix, and escalation criteria. |
+| `scripts/analyze_mdr_funnel.py` | Validation script | Reads an MDR export (CSV or JSON), prints per-stage counts and drop-off percentages, exits non-zero on anomalies. Run: `python skills/messaging-performance-analyzer/scripts/analyze_mdr_funnel.py path/to/mdr.csv` (use `--threshold N` to tune; default 20). |
+| `scripts/fixtures/good.json` | Fixture | Synthetic healthy-funnel MDR export. |
+| `scripts/fixtures/bad.json` | Fixture | Synthetic MDR export with deliberate >50% SENT→DELIVERED drop. |
 
 ## Unverified claims to confirm or remove
 

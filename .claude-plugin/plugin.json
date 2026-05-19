@@ -1,7 +1,7 @@
 {
   "name": "sent-skills",
   "description": "Agent skills for builders on Sent — SMS (10DLC/TCR), WhatsApp (WABA, templates, embedded signup), and RCS (RBM). Covers sender profiles, delivery analytics, multi-tenancy, and channel-specific compliance.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "author": { "name": "Sent" },
   "homepage": "https://github.com/sentdm/agent-skills",
   "repository": "https://github.com/sentdm/agent-skills",

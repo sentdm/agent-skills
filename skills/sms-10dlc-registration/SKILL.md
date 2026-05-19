@@ -106,7 +106,17 @@ A correctly registered tenant has:
 - [ ] Per-carrier approval state stored and reconciled on a schedule
 - [ ] Sender Profile holds `tcr_brand_id` + `tcr_campaign_id`; nothing in application code is hardcoded
 
+## Bundled references and scripts
+
+| Path | Purpose |
+|---|---|
+| `references/tcr-use-cases.md` | TCR use-case taxonomy, vetting, attributes, and per-carrier filtering notes |
+| `references/10dlc-evidence-checklist.md` | Field-by-field checklist for Sent's 10DLC compliance form |
+| `references/10dlc-rejection-remediation.md` | Common TCR / carrier rejection codes mapped to fix steps and re-submission etiquette |
+| `scripts/validate_10dlc_packet.py` | Pre-flight validator for a packet JSON. Run: `python skills/sms-10dlc-registration/scripts/validate_10dlc_packet.py packet.json` |
+
 ## Related Skills
 
 - `sender-profile-architect` — where the TCR identifiers attach in the data model
 - `messaging-performance-analyzer` — diagnosing per-carrier filtering after the campaign is live
+- See top-level `references/sent-glossary.md` for shared Sent terminology.

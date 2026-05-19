@@ -1,0 +1,27 @@
+{
+  "legal_name": "Example Corp LLC",
+  "ein": "12-3456789",
+  "address": "123 Main St, Springfield, IL 62701, US",
+  "website": "https://example.com",
+  "privacy_policy_url": "https://example.com/privacy",
+  "opt_in_mechanism_url": "https://example.com/signup?sms=consent",
+  "use_cases": [
+    {
+      "name": "Order updates",
+      "description": "Shipping and delivery updates for orders placed on example.com.",
+      "sample_messages": [
+        "Example: Your order #1029 has shipped. Track: https://example.com/track/1029. Reply STOP to opt out.",
+        "Example: Order #1042 is out for delivery today. Reply STOP to opt out."
+      ],
+      "opt_out_text": "Example: You're unsubscribed from order updates. Reply HELP for help or STOP to confirm."
+    },
+    {
+      "name": "Two-factor authentication codes",
+      "description": "One-time login codes for example.com account holders.",
+      "sample_messages": [
+        "Example: Your verification code is 482910. It expires in 10 minutes. Reply STOP to opt out."
+      ],
+      "opt_out_text": "Example: You will no longer receive login codes. Reply STOP to confirm."
+    }
+  ]
+}

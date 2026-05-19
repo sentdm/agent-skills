@@ -57,7 +57,7 @@ Heuristics that flip a draft from utility → marketing in Meta's review:
 6. **Name the template** in `snake_case`, prefixed by use case: `order_confirmation_v3`, not `template1`. The name is permanent per (name, language).
 7. **Submit and watch the status webhook.** Statuses: `PENDING` → `APPROVED` | `REJECTED` | `PAUSED`. Re-categorization shows up as a status update with a new `category` field.
 
-For component rules, character limits, and the exact Cloud API request shape, see `references/waba-template-categories.md`.
+For component rules, character limits, and the exact Cloud API request shape, see `references/waba-template-categories.md`. For copy-pasteable payloads across all three categories, see `references/waba-template-examples.md`. For revising a rejected or re-categorized template, see `references/template-rejection-playbook.md`.
 
 ## Common Rationalizations
 
@@ -92,7 +92,21 @@ After submission, confirm:
 - [ ] Status webhook fired with `APPROVED` (not `PENDING` indefinitely — that often means review failure)
 - [ ] Category in the approval matches what you submitted; if Meta re-categorized, revise wording and resubmit under a new version
 
-## Related Skills
+## Bundled references and scripts
+
+| Path | What it is |
+|---|---|
+| `references/waba-template-categories.md` | Meta category boundaries, component rules, Cloud API submission shape |
+| `references/waba-template-examples.md` | Worked, copy-pasteable payloads for all three categories |
+| `references/template-rejection-playbook.md` | Rejection-reason field guide and resubmission etiquette |
+| `scripts/lint_waba_template.py` | Stdlib lint for a template JSON payload (placeholder numbering, samples, category checks) |
+| `scripts/fixtures/utility_good.json` | Passing fixture for the linter |
+| `scripts/fixtures/utility_bad.json` | Failing fixture (wrong placeholder order, promo phrasing in utility) |
+
+Run: `python skills/waba-template-author/scripts/lint_waba_template.py template.json`
+
+## Related skills
 
 - `template-builder-ui` — the tenant-facing form that produces submissions following these rules
 - `messaging-performance-analyzer` — post-send analysis of how the approved template performs
+- See top-level `references/sent-glossary.md` for shared Sent terminology.

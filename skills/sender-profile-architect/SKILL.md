@@ -58,6 +58,8 @@ Why "Sender Profile" — not "Tenant", not "WABA", not "TCR Brand" — is the ri
 
 Every channel-specific resource you store should reference the **Sender Profile ID**, not the tenant ID directly. Tenant ID is one foreign key on the profile.
 
+For the conceptual data model (display name, brand description, `x-sender-id`, channel configuration status, how brands/campaigns/webhooks/API keys hang off the profile), see `references/sender-profile-data-model.md`.
+
 ## Pooled vs Siloed Decision
 
 The basics of pooled-vs-siloed multi-tenancy are well-covered elsewhere; what matters for a messaging platform on Sent is the constraints unique to messaging:
@@ -72,7 +74,7 @@ The basics of pooled-vs-siloed multi-tenancy are well-covered elsewhere; what ma
 
 **Default to pooled** for the Sender Profile and message-event metadata. Silo only when a tenant pays for it or a regulator requires it. Hybrid pattern: pooled compute, pooled profile metadata, but **siloed message-content storage** for tenants with PHI or strict residency requirements.
 
-For decision criteria and the messaging-specific reconciliation / offboarding patterns, see `references/multi-tenancy-patterns.md`.
+For decision criteria and the messaging-specific reconciliation / offboarding patterns, see `references/multi-tenancy-patterns.md`. For worked examples of where to draw the profile boundary (per legal entity, per channel, per department, per tenant in a B2B2C platform, per region), see `references/profile-boundary-examples.md`.
 
 ## Sender Profile Lifecycle (state machine)
 
@@ -168,3 +170,4 @@ A sound Sender Profile architecture has:
 - `sms-10dlc-registration` — the flow that registers a TCR brand + campaign on a Sender Profile
 - `rcs-agent-onboarding` — the flow that creates and verifies an RBM agent on a Sender Profile
 - `messaging-performance-analyzer` — if profile state seems to correlate with delivery problems
+- See the top-level `references/` directory — `sent-glossary.md` — for shared Sent terminology.

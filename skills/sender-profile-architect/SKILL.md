@@ -163,6 +163,8 @@ Use `sent-skills:template-builder-ui` when the architecture decision depends on 
 
 Use `sent-skills:messaging-performance-analyzer` after launch when webhook, delivery, or activity evidence shows a performance issue.
 
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
 ## Suggested bundled references and scripts
 
 | File | Type | Purpose |

@@ -135,9 +135,18 @@ A good analysis ends with:
 - [ ] One concrete next step (fix, deeper pull, or escalation to the relevant carrier / Meta / Google support)
 - [ ] Reproducible query / script — not a hand-computed number
 
+## Bundled references and scripts
+
+| Path | Status | What it gives you |
+|---|---|---|
+| `references/mdr-status-codes.md` | shipped | Per-channel normalized status enum + Meta / carrier / RBM error-code triage tables. |
+| `references/performance-diagnosis-playbook.md` | shipped | Decision tree for which signal to investigate first, channel-specific diagnostic patterns, cross-skill handoff matrix, and escalation criteria. |
+| `scripts/analyze_mdr_funnel.py` | shipped | Reads an MDR export (CSV or JSON), prints per-stage counts and drop-off percentages, exits non-zero on anomalies. Run: `python skills/messaging-performance-analyzer/scripts/analyze_mdr_funnel.py path/to/mdr.csv` (use `--threshold N` to tune; default 20). |
+
 ## Related Skills
 
-- `waba-template-author` — if the diagnosis is "WhatsApp template content" or "wrong category"
-- `sms-10dlc-registration` — if the diagnosis is TCR vetting score / campaign throttle / brand mis-classification
-- `rcs-agent-onboarding` — if the diagnosis is "agent not launched in that carrier" or capability mismatch
-- `sender-profile-architect` — if the diagnosis is account-tier / sender-quality / multi-channel state drift
+- `sent-skills:waba-template-author` — if the diagnosis is "WhatsApp template content" or "wrong category"
+- `sent-skills:sms-10dlc-registration` — if the diagnosis is TCR vetting score / campaign throttle / brand mis-classification
+- `sent-skills:rcs-agent-onboarding` — if the diagnosis is "agent not launched in that carrier" or capability mismatch
+- `sent-skills:sender-profile-architect` — if the diagnosis is account-tier / sender-quality / multi-channel state drift
+- See the top-level `sent-glossary` (`../../references/sent-glossary`) for shared Sent terminology.

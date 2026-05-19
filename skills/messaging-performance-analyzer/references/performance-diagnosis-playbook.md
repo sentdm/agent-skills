@@ -1,112 +1,137 @@
-# Performance Diagnosis Playbook
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Message lifecycle, Error envelope and full error code catalog, Send-time error codes, Webhook payload format, Webhook model, Webhook event lifecycle) -->
 
-Supporting reference for `messaging-performance-analyzer`. The SKILL.md tells you *what* a clean funnel analysis looks like; this doc tells you *which signal to pull next* and *when to hand off to another skill*.
+# Performance diagnosis playbook
 
-## 1. Decision Tree — Which Signal First?
+Supporting reference for `messaging-performance-analyzer`. The SKILL.md tells you *what* a clean funnel analysis looks like; this doc tells you *which signal to pull next* for a specific symptom, keyed on the Sent error codes that actually surface in v3.
 
-Most production performance complaints arrive as one of three vague shapes. Resist running every query — pick the entry point that matches the shape, then narrow.
+For the full catalog of codes referenced below, see `mdr-status-codes.md`.
 
-```
-"Messages aren't going through" / "delivery is bad"
-   │
-   ├─ Is it scoped to one tenant / Sender Profile? ──── Yes ──▶  Check sender-profile state
-   │                                                              (registration, quality rating,
-   │                                                               capability) BEFORE pulling MDRs.
-   │
-   ├─ Is it scoped to one channel?    ──── Yes ──▶  Pull the channel-appropriate funnel only.
-   │                                                  Don't blend.
-   │
-   ├─ Is it scoped to one template / campaign / agent? ── Yes ▶  Pull MDR funnel filtered to that ID;
-   │                                                              compare to the tenant's other
-   │                                                              template / campaign baseline.
-   │
-   └─ Is it everywhere?               ──── Yes ──▶  Webhook ingestion check first
-                                                    (see "Webhook drop" below).
-```
+## Symptom-driven diagnosis
 
-The rule: **state checks are free, funnel queries are expensive.** Always rule out a degraded Sender Profile, expired access token, or paused TCR campaign before grinding through MDR aggregations.
+Every entry follows the same pattern: **observable symptom -> where the failure code lives -> what to check first -> handoff if rooted elsewhere.**
 
-### Investigate-First Order
+### Symptom: messages stuck in QUEUED -> ROUTED, never reach SENT
 
-1. **Sender Profile state** — registration complete, tokens valid, quality ratings green, capability flags fresh.
-2. **Webhook drop** — is Sent actually receiving status updates? If MDR rows stop appearing for a window but the API still accepts sends, the problem is webhook delivery, not message delivery. Check Sent's [delivery webhooks](https://docs.sent.dm) docs.
-3. **Per-channel funnel** — compute counts per stage for the cohort.
-4. **MDR error codes** — only after a broken stage is identified. See `mdr-status-codes.md`.
+The lifecycle gate between `ROUTED` and `SENT` is where Sent dispatches to the upstream provider. Stuck cohorts at this gate point at a Sent-side rate or capacity issue, not provider delivery.
 
-## 2. Channel-Specific Diagnostic Patterns
+Check, in order:
 
-### SMS — Carrier Filtering Signs
+1. **`BUSINESS_002` (429, rate limit exceeded)** — inspect the response envelope of recent `POST /v3/messages` calls and the `X-RateLimit-Remaining` / `Retry-After` headers. Message-sending limits are tiered: Starter 60/min, Growth 300/min, Enterprise custom. If the caller bursts above the tier, new sends 429 and queued ones back up.
+2. **`BUSINESS_003` (422, insufficient account balance)** — a stalled queue with zero forward progress and a `BUSINESS_003` in the response is a billing block, not a delivery block. Escalate via account / billing, not delivery.
+3. **`BUSINESS_008` (422, operation exceeds account quota)** — quota gate hit; fix is at the account-tier level.
+4. **`INTERNAL_003` (502, external provider error) / `INTERNAL_005` (503)** — Sent's upstream provider is degraded. Backoff and retry; no tenant-side fix.
 
-The carrier silently dropped your message when:
+If none of the above codes appear and messages are sitting in `QUEUED`/`ROUTED` for unusually long, capture sample `message_id` values and escalate to Sent support with the timestamps and the request IDs.
 
-- Funnel shows `sent` → `delivered` cliff (>30% drop) **scoped to one carrier**. Aggregate by carrier first.
-- The same content lands on Verizon but is filtered by T-Mobile (or vice versa).
-- DLRs return `CARRIER_REJECT_*` with no opt-out / invalid-number signal.
-- Drop coincides with a recent campaign content change, a new keyword, or a URL shortener swap.
+### Symptom: every send in a batch fails synchronously with the same error
 
-Likely root causes: TCR campaign use-case mismatch, low vetting score, shared short-code reputation, unregistered link, or carrier-specific content filter on a keyword (loans, crypto, supplements). Hand off to `sent-skills:sms-10dlc-registration` for TCR-side fixes.
+The whole-batch rejection is in the HTTP response envelope — `error.code` is the lead. Common synchronous codes:
 
-### WhatsApp — Template Issues
-
-Symptoms that point at the template, not the funnel:
-
-- `132000` (template paused) or `132001` (template missing) dominates `failed` for one template ID.
-- `131048` (spam rate limit) rises after a template content change.
-- Read rate collapses on one template only — usually a CTA-or-content regression, not a delivery issue.
-- `131047` (re-engagement) dominates a marketing flow — the 24-hour window expired between session and send.
-
-Hand off to `sent-skills:waba-template-author` to re-author or re-categorize the template.
-
-### RCS — Fallback Chain Breaks
-
-The RCS funnel is *two* funnels stitched together; breaks usually live in the seam:
-
-- `NOT_RCS_CAPABLE` dominates → most of the audience never enters the RCS funnel; it's an audience-targeting issue, not RCS delivery.
-- `AGENT_NOT_LAUNCHED` scoped to one carrier → the RBM agent isn't approved for that carrier yet. Hand off to `sent-skills:rcs-agent-onboarding`.
-- Capability-check passes, send accepted, but no delivery DLR → carrier didn't surface a DLR; treat as "sent, unknown" and pull a sample to inspect.
-- Fallback fired but the SMS leg also failed → the Sender Profile's fallback SMS sender is in a different state (e.g. paused campaign). Check both legs in `sent-skills:sender-profile-architect`.
-
-## 3. When Symptoms Cross Skills — Handoff Matrix
-
-| Symptom in the MDR | Likely root cause | Hand off to |
+| Code | What it means | Where to fix |
 |---|---|---|
-| `131005`, `133006` (WhatsApp auth / register) | Sender Profile registration drifted | `sent-skills:sender-profile-architect`, then `sent-skills:waba-embedded-signup` if re-auth needed |
-| `133016` (WA tier exhausted) on a growing tenant | Tier upgrade overdue | `sent-skills:sender-profile-architect` (capacity planning) |
-| `131048` rising across all templates | Account quality dropped — likely content / frequency | `sent-skills:waba-template-author` (review template mix), then sender-profile rate-limit policy |
-| `132000` / `132001` on one template | Template lifecycle problem | `sent-skills:waba-template-author` |
-| SMS `CAMPAIGN_SUSPENDED`, `BRAND_REJECTED` | TCR-side action | `sent-skills:sms-10dlc-registration` |
-| SMS carrier-filter cliff on new content | Content / use-case mismatch | `sent-skills:sms-10dlc-registration` |
-| RCS `AGENT_NOT_LAUNCHED` for one carrier | Per-carrier approval pending | `sent-skills:rcs-agent-onboarding` |
-| RCS `NOT_RCS_CAPABLE` dominates | Audience targeting / fallback policy | `sent-skills:sender-profile-architect` (review fallback policy) |
-| Funnel rows missing entirely for a window | Webhook ingestion problem on Sent's side | Escalate to Sent support (see below) |
-| Cross-channel state drift (one Sender Profile, channels disagree) | Sender Profile composition issue | `sent-skills:sender-profile-architect` |
+| `AUTH_001` / `AUTH_002` | Missing or bad `x-api-key` | Caller integration. |
+| `AUTH_005` / `AUTH_006` / `AUTH_007` | Account isn't fully activated / KYC incomplete / no channel configured | `sent-skills:sender-profile-architect` -> onboarding path. |
+| `BUSINESS_002` | Rate limit | Slow down or upgrade tier. |
+| `BUSINESS_003` | Insufficient balance | Top up account. |
+| `BUSINESS_004` | Every recipient has `opt_out=true` | Contact-list hygiene — the batch is correct but the audience is exhausted. |
+| `BUSINESS_005` | WhatsApp template not approved (`PENDING` / `REJECTED`) | `sent-skills:waba-template-author` to fix and re-submit. |
+| `BUSINESS_007` | Channel not available for these contacts | Check each contact's `available_channels`; route via a different channel or update the contact. |
+| `VALIDATION_002` | Phone number not E.164 | Caller bug — fix formatting. |
+| `VALIDATION_006` | Invalid enum (case-sensitive) | Caller bug — enums are case-sensitive. |
 
-## 4. When to Escalate to Sent Support vs Investigate Yourself
+Rule: a synchronous error never produces FAILED message rows. If the user is asking "why is `message_id=X` failed?" and you can't find the row, look at the request envelope — the batch was rejected before any message was created.
+
+### Symptom: some recipients in a batch succeed, others end up FAILED
+
+This is the per-recipient async failure case. The batch returned 202; some messages later transitioned to FAILED. The diagnosis lives in the `description` field, accessible via:
+
+- `GET /v3/messages/{id}` -> `description`
+- `GET /v3/messages/{id}/activities` -> the FAILED activity row's `description`
+- The `message.failed` webhook payload tells you which message — **you still must fetch the message** to see the code
+
+Look for these `ERR_*` codes in `description`:
+
+| Code | Triage |
+|---|---|
+| `ERR_CONSENT_BLOCKED` | Per-recipient opt-out or suppression-list hit. Surface count, dedupe by contact, fix the contact list upstream. This is the per-recipient cousin of `BUSINESS_004` — same root cause, different surface. |
+| `ERR_ROUTE_DENIED` | No active route for this channel/country combo. If concentrated in one country: route configuration. If across many countries: sender-profile setup. Hand off to `sent-skills:sender-profile-architect`. |
+| `ERR_TEMPLATE_PARAMS_INVALID` | Caller bug — template variables missing or failed regex/type validation. Pull the failing payload, compare against template `variables[]`. Hand off to `sent-skills:waba-template-author` or `sent-skills:template-builder-ui` for the caller-side fix. |
+
+Heuristic: if one `ERR_*` code dominates (>50% of failures), the root cause is at the source of those failures (contact list, route table, caller integration). If failures are evenly distributed, look at infrastructure (provider, network, account state).
+
+### Symptom: webhooks are not firing / customer endpoint sees nothing
+
+Before blaming delivery, prove the webhook itself is working. The webhook config object exposes diagnostic fields directly:
+
+| Check | Field | What "broken" looks like |
+|---|---|---|
+| Is the webhook active? | `is_active` | `false` -> nothing fans out. |
+| Is the endpoint receiving? | `last_delivery_attempt_at` | If recent attempts exist but `last_successful_delivery_at` is much older, the endpoint is returning non-2xx. |
+| Is the endpoint healthy? | `consecutive_failures` | Non-zero and growing -> Sent has been hitting the endpoint and getting errors. The fix is on the customer side. |
+| Are the right events subscribed? | `event_types`, `event_filters` | A filter like `{"message": ["delivered"]}` will never deliver `message.failed`. If a customer says "I never see failures," check this first. |
+| Is the secret current? | `signing_secret` | If recently rotated and the customer is still verifying with the old secret, requests look like signature failures. |
+
+Use `POST /v3/webhooks/{id}/test` (60/min limit) to inject a synthetic event and confirm reachability end-to-end. Use `GET /v3/webhooks/{id}/events` to compare what Sent attempted to fan out against what the customer database actually persisted.
+
+If Sent's webhook event history shows successful deliveries but the customer database is missing rows, the gap is in customer-side ingestion, not in Sent delivery — close the ticket and direct to the customer's webhook handler.
+
+### Symptom: WhatsApp / RCS `READ` rate is suspiciously low
+
+`READ` only exists for WhatsApp and RCS — SMS has no equivalent. Even where supported:
+
+- WhatsApp recipients can disable read receipts; treat read rate as advisory, not authoritative.
+- RCS read receipts depend on the handset implementation.
+- Compare like-for-like cohorts (same template, same country, same week) before concluding "reads dropped."
+
+If `DELIVERED` is healthy and `READ` is low across all cohorts, the cause is almost always recipient setting / handset variance, not a Sent or template issue.
+
+### Symptom: RCS funnel "looks broken"
+
+RCS is two funnels stitched together. Capability check happens before delivery; most "RCS broken" reports are actually "the audience isn't RCS-capable."
+
+- If the Sender Profile uses fallback (`"channel": ["rcs", "sms"]`), the SMS fallback leg has its own `message_id` and its own lifecycle. Count separately. Never roll fallback SMS into RCS delivery.
+- Per-carrier RCS approval is real — an agent can be launched on one carrier and not on another. Symptoms scoped to one carrier point at agent state; hand off to `sent-skills:rcs-agent-onboarding`.
+
+## Cross-skill handoff matrix
+
+| Symptom (with the code that exposes it) | Likely root cause | Hand off to |
+|---|---|---|
+| `AUTH_005` / `AUTH_006` / `AUTH_007` | Account not fully activated | `sent-skills:sender-profile-architect` |
+| `BUSINESS_005` (template not approved) | Template lifecycle issue | `sent-skills:waba-template-author` |
+| `ERR_CONSENT_BLOCKED` dominant | Contact-list hygiene | Caller-side (contact ingestion) |
+| `ERR_ROUTE_DENIED` dominant | Sender-profile / route config | `sent-skills:sender-profile-architect` |
+| `ERR_TEMPLATE_PARAMS_INVALID` dominant | Caller payload bug | `sent-skills:waba-template-author` or `sent-skills:template-builder-ui` |
+| WhatsApp `131005` / `133006` (in `description`) | WABA registration / auth drift | `sent-skills:waba-embedded-signup` (re-auth / re-register) |
+| WhatsApp `133016` (in `description`) | Tier exhausted | `sent-skills:sender-profile-architect` (capacity planning) |
+| SMS carrier-filter spike on new content | Content / use-case mismatch | `sent-skills:sms-10dlc-registration` |
+| RCS scoped to one carrier (`description` mentions agent state) | Per-carrier approval | `sent-skills:rcs-agent-onboarding` |
+| Webhook `consecutive_failures` growing | Customer endpoint failing | Customer-side (endpoint handler) |
+
+## When to escalate to Sent support
 
 Investigate yourself first when:
 
-- The symptom is scoped to one tenant, one template, one campaign, or one cohort.
-- MDR rows exist and an error code is present — the code is your lead.
-- The state checks (Sender Profile, TCR campaign, WABA token, RBM agent) are all green.
-- The fix is in tenant configuration (template content, campaign vetting, audience targeting).
+- The symptom is scoped to one tenant, template, campaign, or country.
+- A specific Sent code (`AUTH_*`, `BUSINESS_*`, `ERR_*`) explains the symptom.
+- The webhook health fields (`is_active`, `consecutive_failures`, `last_successful_delivery_at`) prove ingestion is fine.
 
 Escalate to Sent support when:
 
-- MDR rows stop appearing for a window across multiple tenants (webhook ingestion regression on Sent's side).
-- Multiple Sender Profiles flip to a degraded state at the same time without a tenant-side change.
-- An upstream provider returned an error code that isn't in `mdr-status-codes.md` — Sent normalization may need to be updated.
-- A delivery anomaly correlates with a Sent platform deploy time window.
-- You see `failed` rows with no error code populated — normalization is broken.
+- Messages sit in `QUEUED`/`ROUTED` for an extended window with no rate-limit / balance / quota codes in the recent request envelopes.
+- `INTERNAL_001` / `INTERNAL_002` / `INTERNAL_004` show up at non-trivial rates (Sent infrastructure).
+- The `description` on FAILED messages is empty — normalization is broken on Sent's side.
+- A delivery anomaly correlates with a Sent platform deploy window.
 
-When escalating, include: tenant ID, Sender Profile ID, channel, cohort definition, time window, the broken stage with absolute counts, top error codes, and a sample of message IDs to inspect. Don't escalate with "delivery looks bad" — escalate with the cohort and the codes.
+When escalating, include: account / profile ID, channel, cohort definition (template, country, time window), broken lifecycle stage with absolute counts, distribution of error codes (synchronous and `ERR_*`), `X-Request-Id` values, and a sample of `message_id` values to inspect.
 
-## 5. Diagnostic Loop
+## Diagnostic loop
 
 Repeat until the symptom is explained or scoped:
 
-1. Narrow the cohort (channel × template/campaign × country × tenant × window).
-2. Compute the funnel; identify the broken stage.
-3. Pull the top error codes at that stage; map via `mdr-status-codes.md`.
-4. If a code points to a sender-profile / template / campaign issue, hand off via §3.
-5. If the codes are unfamiliar or rows are missing, escalate to Sent support per §4.
-6. Record the diagnosis with quantified evidence — never "looks better now" without a recomputed funnel.
+1. Pin the cohort (channel × template × country × profile × window).
+2. Compute the funnel; identify the broken lifecycle stage (`QUEUED`/`ROUTED`/`SENT`/`DELIVERED`/`READ`).
+3. If the gate is between `QUEUED` and `SENT`: check synchronous codes on recent request envelopes.
+4. If the gate is at `FAILED` after `SENT`: fetch a sample of failed message IDs, read `description` for `ERR_*` codes.
+5. If the symptom is missing customer-side data: prove webhook health via `is_active`, `consecutive_failures`, and `/v3/webhooks/{id}/events` before blaming delivery.
+6. Hand off via the matrix above, or escalate to Sent support with the required evidence.
+7. Quantify the diagnosis — never "looks better now" without a recomputed funnel.

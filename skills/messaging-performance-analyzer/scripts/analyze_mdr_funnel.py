@@ -15,6 +15,7 @@ Exit codes:
 Examples:
     python analyze_mdr_funnel.py path/to/mdr.json
     python analyze_mdr_funnel.py path/to/mdr.csv --threshold 15
+    python analyze_mdr_funnel.py path/to/mdr.json --show-errors
 """
 
 from __future__ import annotations
@@ -22,7 +23,9 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import re
 import sys
+from collections import Counter
 from pathlib import Path
 from typing import Iterable
 
@@ -52,6 +55,16 @@ def _parse_args(argv: list[str]) -> argparse.Namespace:
             "Drop-off percentage threshold per stage. Any stage with a "
             "drop-off greater than this value triggers a non-zero exit. "
             "Default: 20."
+        ),
+    )
+    parser.add_argument(
+        "--show-errors",
+        action="store_true",
+        help=(
+            "When set, also summarise the count of each Sent send-time error "
+            "code (ERR_*) parsed from the 'description' field of FAILED "
+            "messages. Non-FAILED rows and rows without a description are "
+            "ignored. Does not change exit codes."
         ),
     )
     return parser.parse_args(argv)
@@ -136,6 +149,52 @@ def _print_report(counts: dict[str, int], drops: list[tuple[str, str, float]]) -
         print(f"  {a} -> {b}: {pct:.1f}%")
 
 
+# Sent's documented send-time per-message error codes appear in the message
+# `description` field on FAILED rows. See references/mdr-status-codes.md.
+_ERR_CODE_RE = re.compile(r"\bERR_[A-Z0-9_]+\b")
+_STATUS_KEYS = ("status", "stage", "latest_status")
+
+
+def _is_failed(record: dict) -> bool:
+    # FAILED isn't in STAGES, so _latest_stage() returns None for it. Check
+    # the explicit status keys and the statuses history directly.
+    for key in _STATUS_KEYS:
+        val = record.get(key)
+        if isinstance(val, str) and val.upper() == "FAILED":
+            return True
+    history = record.get("statuses")
+    if isinstance(history, list):
+        for entry in history:
+            if isinstance(entry, dict) and isinstance(entry.get("stage"), str) \
+                    and entry["stage"].upper() == "FAILED":
+                return True
+    return False
+
+
+def summarise_errors(messages: Iterable[dict]) -> Counter:
+    """Return a Counter of ERR_* codes parsed from FAILED messages' descriptions."""
+    counter: Counter = Counter()
+    for record in messages:
+        if not isinstance(record, dict) or not _is_failed(record):
+            continue
+        description = record.get("description")
+        if not isinstance(description, str):
+            continue
+        # Dedupe within a row so one message with the same code mentioned
+        # twice doesn't double-count.
+        counter.update(set(_ERR_CODE_RE.findall(description)))
+    return counter
+
+
+def _print_error_summary(counter: Counter) -> None:
+    print("\nERR_* codes (from FAILED descriptions):")
+    if not counter:
+        print("  (none found)")
+        return
+    for code, count in counter.most_common():
+        print(f"  {code:<32} {count}")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     try:
@@ -150,6 +209,9 @@ def main(argv: list[str] | None = None) -> int:
     counts = compute_funnel(messages)
     drops = stage_dropoffs(counts)
     _print_report(counts, drops)
+
+    if args.show_errors:
+        _print_error_summary(summarise_errors(messages))
 
     anomalies = [(a, b, pct) for a, b, pct in drops if pct > args.threshold]
     if anomalies:

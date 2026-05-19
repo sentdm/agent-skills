@@ -177,15 +177,18 @@ Use `sent-skills:sms-10dlc-registration` when WhatsApp copy will be mirrored to 
 
 Use `sent-skills:messaging-performance-analyzer` when approved WhatsApp templates have poor delivery, read, or webhook outcomes.
 
-## Suggested bundled references and scripts
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## Bundled references and scripts
 
 | File | Type | Purpose |
 |---|---|---|
-| `references/waba-template-categories.md` | Policy lookup table | Keep detailed Meta category rules, component limits, and rejection codes outside the skill body. |
-| `references/waba-template-examples.md` | Worked examples | Provide approved-style examples for utility, marketing, and authentication templates. |
-| `references/template-rejection-playbook.md` | Decision matrix | Map rejection reasons to precise edits. |
-| `scripts/lint_waba_template.py` | Validation script | Check placeholders, samples, category-risk phrases, button structure, and language code before submission. |
-| `scripts/render_template_samples.py` | Utility script | Render variable samples into final copy for reviewer preview. |
+| `references/waba-template-categories.md` | Policy lookup table | Meta category boundaries, component rules, and Cloud API submission shape. |
+| `references/waba-template-examples.md` | Worked examples | Copy-pasteable payloads for utility, marketing, and authentication templates. |
+| `references/template-rejection-playbook.md` | Decision matrix | Map rejection reasons to precise edits and resubmission etiquette. |
+| `scripts/lint_waba_template.py` | Validation script | Stdlib lint for a template JSON payload (placeholder numbering, samples, category-risk phrases, button structure, language code). Run: `python skills/waba-template-author/scripts/lint_waba_template.py template.json`. |
+| `scripts/fixtures/utility_good.json` | Fixture | Passing fixture for the linter. |
+| `scripts/fixtures/utility_bad.json` | Fixture | Failing fixture (wrong placeholder order, promo phrasing in utility). |
 
 ## Unverified claims to confirm or remove
 

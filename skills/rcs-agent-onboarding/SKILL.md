@@ -138,6 +138,8 @@ Use `sent-skills:template-builder-ui` when the RCS launch needs reusable templat
 
 Use `sent-skills:messaging-performance-analyzer` after launch when the user has message IDs, webhook events, failed sends, or delivery-rate symptoms.
 
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
 ## Suggested bundled references and scripts
 
 | File | Type | Purpose |

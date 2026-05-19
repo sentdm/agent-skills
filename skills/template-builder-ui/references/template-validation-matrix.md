@@ -1,3 +1,5 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Template model, Component support matrix, Character limits) -->
+
 # Template Validation Matrix
 
 Per-channel rules a Sent template builder UI must enforce client-side, with the surface treatment for each failure mode. Use this as the single source of truth when wiring validators into the editor — the same matrix should drive the submission handler, so a "soft warning" never silently becomes a hard reject downstream.
@@ -8,7 +10,35 @@ Per-channel rules a Sent template builder UI must enforce client-side, with the 
 - **Blocked save** — the Submit button is disabled until resolved; tooltip explains why.
 - **Soft warning** — amber banner or icon, save still allowed, but the tenant must acknowledge.
 
+## Component support matrix (Sent-confirmed)
+
+|  | SMS | RCS | WhatsApp |
+|---|:-:|:-:|:-:|
+| Header | ❌ | ✅ | ✅ |
+| Body | ✅ | ✅ | ✅ |
+| Footer | ❌ | ✅ | ✅ |
+| Buttons | ❌ | ✅ | ✅ |
+
+Header types (where supported): `TEXT`, `IMAGE`, `VIDEO`, `DOCUMENT`.
+
+Button types (where supported): `QUICK_REPLY`, `URL`, `PHONE_NUMBER`.
+
+Template categories (apply to WhatsApp review; not a Sent enum extension): `UTILITY`, `MARKETING`, `AUTHENTICATION`. No others.
+
+## Character limits (Sent-confirmed)
+
+| Channel | Component | Limit |
+|---|---|---|
+| SMS | Body | 160 chars per segment (GSM-7); longer messages split |
+| WhatsApp | Body | 1028 chars |
+| WhatsApp | Header (text) | 60 chars (optional component) |
+| WhatsApp | Footer | 60 chars (optional component) |
+| RCS | Body | 1028 chars |
+| RCS | Header | 60 chars (optional component) |
+
 ## SMS
+
+SMS templates support **Body only** — no Header, Footer, or Buttons. All rules below apply to body content.
 
 | Rule | Limit / Behavior | Surface |
 |---|---|---|
@@ -25,29 +55,29 @@ Reference: see top-level `references/tcr-use-cases.md` for the campaign-level fi
 
 ## WhatsApp
 
-Rules are *category-aware* — utility, marketing, and authentication each have a different shape. The builder's category picker (per `SKILL.md`) reshapes which validators apply.
+Rules are *category-aware* — `UTILITY`, `MARKETING`, and `AUTHENTICATION` each have a different shape. The builder's category picker (per `SKILL.md`) reshapes which validators apply.
 
 | Rule | Limit / Behavior | Surface |
 |---|---|---|
 | Name format | `^[a-z][a-z0-9_]{0,511}$` | Inline error; auto-snake_case the input |
-| Name+language permanence | Immutable after first save | Blocked save when editing; show `_v1` suffix nudge for new versions |
-| Body length | 1024 chars across all categories | Inline char counter; blocked save above cap |
+| Name+language permanence | Treat as immutable as a product-governance choice (the Sent v3 `PUT /v3/templates/{id}` accepts these fields, but the UI should still steer tenants to a versioned `_v2` flow for auditability) | Blocked save when editing; show `_v1` suffix nudge for new versions |
+| Body length | 1028 chars across all categories | Inline char counter; blocked save above cap |
 | Body required | Required for utility/marketing; auth body is fixed by Meta | Blocked save if empty |
-| Header type | One of: none / text / image / video / document / location | Radio control — invalid combos unreachable |
+| Header type | One of: none / `TEXT` / `IMAGE` / `VIDEO` / `DOCUMENT` | Radio control — invalid combos unreachable |
 | Header (text) length | 60 chars, max 1 variable | Inline error |
 | Header (media) sample | Sample upload required at submit | Blocked save without a sample asset |
 | Footer length | 60 chars, no variables | Inline error; strip `{{` on paste |
-| Buttons — mutually exclusive | Quick replies XOR CTAs (URL + phone). Mixing is a Meta reject. | Top-level button-type radio prevents construction; never allow per-button type picks |
+| Buttons — mutually exclusive | `QUICK_REPLY` XOR CTAs (`URL` + `PHONE_NUMBER`). Mixing is a Meta reject. | Top-level button-type radio prevents construction; never allow per-button type picks |
 | Quick replies | Max 3, 25 char labels | Add button hidden at 3; inline error on label length |
-| CTA buttons | Max 2 total, mix of URL + phone allowed | Add button hidden at 2 |
+| CTA buttons | Max 2 total, mix of `URL` + `PHONE_NUMBER` allowed | Add button hidden at 2 |
 | URL CTA variables | Max 1 trailing variable, must be the URL suffix (`https://example.com/orders/{{1}}`) | Inline error on inline variables |
 | Variable placeholders | `{{n}}` ordinal, monotonically increasing from `{{1}}` | Autocomplete next index; inline error on gaps (`{{1}}` then `{{3}}`) |
 | Variable samples | Required at submit, non-empty | Sticky sample editor + blocked save until all filled |
 | Sample neutrality | Promotional words in samples (off / sale / free / now / discount / deal …) trigger Meta re-categorization | Soft warning on the offending sample field |
-| Authentication body | Fixed copy with `{{1}}` for OTP | Body field becomes read-only when category = authentication |
+| Authentication body | Fixed copy with `{{1}}` for OTP | Body field becomes read-only when category = `AUTHENTICATION` |
 | Authentication buttons | Single Copy code / One-tap button + `code_expiration_minutes` | Component editor swaps shape |
 
-Reference: see top-level `references/waba-template-categories.md` for the category decision tree the picker presents.
+Reference: see top-level `references/waba-template-categories.md` for the category decision tree the picker presents. Mixed-button policy details remain an external Meta concern — link, do not mirror.
 
 ## RCS
 
@@ -56,6 +86,8 @@ RCS templates are richer (rich cards, suggested replies, suggested actions) but 
 | Rule | Limit / Behavior | Surface |
 |---|---|---|
 | SMS fallback body | Required, follows the SMS rules above | Blocked save without fallback; auto-derive from card title+description as a starting point |
+| Body length | 1028 chars | Inline counter |
+| Header (text) length | 60 chars | Inline counter |
 | Rich card title | 200 chars | Inline counter |
 | Rich card description | 2000 chars | Inline counter |
 | Card media | Image or video; image ≤ 100 KB for "short height", ≤ 2 MB max; video ≤ 100 MB | Blocked save on oversize; soft warning at >50 KB image for short-height layout |

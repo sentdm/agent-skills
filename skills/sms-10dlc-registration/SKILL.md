@@ -145,14 +145,18 @@ Use `sent-skills:messaging-performance-analyzer` when registered traffic still s
 
 Use `sent-skills:template-builder-ui` when the customer needs reusable SMS template copy that matches the registered use case.
 
-## Suggested bundled references and scripts
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## Bundled references and scripts
 
 | File | Type | Purpose |
 |---|---|---|
-| `references/tcr-use-cases.md` | Lookup table | Keep TCR use-case taxonomy, sample-message patterns, and rejection reasons outside the skill body. |
-| `references/10dlc-evidence-checklist.md` | Worked example | Provide a filled evidence packet with good and bad examples. |
-| `references/10dlc-rejection-remediation.md` | Decision matrix | Map common rejection reasons to corrections. |
-| `scripts/validate_10dlc_packet.py` | Validation script | Check that required URLs, opt-in evidence, sample messages, and opt-out language are present before submission. |
+| `references/tcr-use-cases.md` | Lookup table | TCR use-case taxonomy, sample-message patterns, and rejection reasons. |
+| `references/10dlc-evidence-checklist.md` | Worked example | Field-by-field checklist for Sent's 10DLC compliance form. |
+| `references/10dlc-rejection-remediation.md` | Decision matrix | Common TCR / carrier rejection codes mapped to fix steps and re-submission etiquette. |
+| `scripts/validate_10dlc_packet.py` | Validation script | Pre-flight validator for a packet JSON. Run: `python skills/sms-10dlc-registration/scripts/validate_10dlc_packet.py packet.json`. |
+| `scripts/fixtures/good.json` | Fixture | Complete valid packet (passes validator). |
+| `scripts/fixtures/bad.json` | Fixture | Packet with missing fields / invalid EIN / short sample (validator exits non-zero). |
 
 ## Unverified claims to confirm or remove
 

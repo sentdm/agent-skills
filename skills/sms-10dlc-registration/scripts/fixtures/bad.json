@@ -1,0 +1,17 @@
+{
+  "legal_name": "Example Corp LLC",
+  "ein": "123-456789",
+  "address": "123 Main St, Springfield, IL 62701, US",
+  "website": "https://example.com",
+  "opt_in_mechanism_url": "https://example.com/signup",
+  "use_cases": [
+    {
+      "name": "Order updates",
+      "description": "Shipping and delivery updates.",
+      "sample_messages": [
+        "Order shipped!"
+      ],
+      "opt_out_text": "You're unsubscribed."
+    }
+  ]
+}

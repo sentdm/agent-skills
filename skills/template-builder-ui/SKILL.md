@@ -106,14 +106,14 @@ Run validation in layers so users know whether a problem is a Sent schema issue,
 
 ### 6. Support Sent’s creation paths
 
-Sent docs describe dashboard creation from a sample, from scratch, from Meta import, and from JSON definition. Mirror those paths where relevant.
+Sent's dashboard exposes four template creation flows at `app.sent.dm/dashboard/templates`. Mirror them by name and intent.
 
 | Path | Best for | UI requirement |
 |---|---|---|
-| Sample | New users and common templates | Curated examples with editable variables. |
-| Scratch | Product teams building custom flows | Guided component editor. |
-| Meta import | Existing WhatsApp template libraries | Import review, mapping, and status reconciliation. |
-| JSON definition | Developers and migrations | Schema validation, diff view, and clear errors. |
+| Create from Sample | New users and common templates | Curated examples with editable variables. |
+| Create from Scratch | Product teams building custom flows | Guided component editor. |
+| Import from Meta | Existing WhatsApp template libraries | Import review, mapping, and status reconciliation. |
+| Create From Definition | Developers and migrations | Schema validation, diff view, and clear errors. |
 
 ### 7. Preview the send path, not only the design
 
@@ -168,7 +168,6 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- A universal `PAUSED` template status in Sent was not verified; Sent docs list Draft, Pending, Approved, and Rejected.
-- Name/language/category immutability after first save contradicts the verified update endpoint if stated as an API limitation.
-- Exact WhatsApp component limits and mixed-button rules require Meta policy/reference validation; keep them in WhatsApp-specific references.
-- Webhook event names for template status changes were not verified in the extracted OpenAPI; discover them through `/v3/webhooks/event-types` for the account.
+- Whether template name/language/category are immutable after first save is not documented in the snapshot; the `PUT /v3/templates/{id}` endpoint accepts these fields, so behavior should be verified against the live OpenAPI before assuming. Treat product-side locking as a governance choice, not an API fact.
+- Mixed-button rules (quick-reply XOR CTA, ordering, per-category constraints) remain external Meta concerns — link to Meta's WhatsApp template docs, do not mirror.
+- Template-status webhook event names follow the `<field>.<event>` pattern (the snapshot confirms the envelope) but the snapshot does not enumerate template-specific events. Discover the exact names via `GET /v3/webhooks/event-types` for the account.

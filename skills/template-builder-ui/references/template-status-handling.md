@@ -1,21 +1,23 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Template model, Webhook payload format, Webhook model (config)) -->
+
 # Template Status Handling
 
 The lifecycle states a Sent template moves through, which fields are editable in each, how the UI gets notified of upstream changes, and how to handle resubmission. The builder UI tracks every template against the state machine below.
 
 ## Status enum
 
-Sent normalizes template status into four states the UI renders, regardless of underlying channel:
+Sent's template status enum is exactly four states the UI renders, regardless of underlying channel: `Draft`, `Pending`, `Approved`, `Rejected`. There is **no `PAUSED` state in Sent.** Meta's upstream `PAUSED` flag exists Meta-side only and is not surfaced into the Sent template-status enum.
 
 | State | Meaning | Source |
 |---|---|---|
 | `Draft` | Authored locally, not yet submitted | Sent-internal |
-| `Pending` | Submitted, awaiting review (WhatsApp = Meta review; RCS = Google review; SMS skips this state) | Set by Sent on submit, cleared by upstream callback |
+| `Pending` | Submitted, awaiting review (WhatsApp = Meta review, typically 24–48 hours per Sent docs; RCS = Google review; SMS does not gate on review) | Set by Sent on submit, cleared by upstream callback |
 | `Approved` | Live and sendable | Set by Sent on upstream approval |
 | `Rejected` | Upstream rejected the submission | Set by Sent on upstream rejection, carries a `rejection_reason` payload |
 
-**Note on Meta `PAUSED`:** Meta sometimes flags an Approved WhatsApp template as `PAUSED` due to deliverability quality issues. Sent surfaces this as `Approved` + a `paused` badge on the same row — it is *not* a separate top-level state because the template remains in the catalog and resumes automatically once quality recovers. Do not bucket PAUSED templates as Rejected.
+Other upstream states (Meta `PAUSED`, `DISABLED`, `IN_APPEAL`, etc.) do not appear as Sent statuses. If your UI needs to surface a Meta-only signal (e.g. a deliverability pause), treat it as a secondary annotation on an `Approved` row — never bucket those rows as `Rejected`.
 
-Other upstream states (Meta `DISABLED`, `IN_APPEAL`, etc.) collapse into Sent's enum per the Sent template-status API docs at https://docs.sent.dm.
+**During `Pending`, SMS sends still work.** Per Sent docs, a template can be sent over SMS while it is still awaiting WhatsApp approval — the `Pending` status gates only the channels that require upstream review. Reflect this in the UI: don't grey out the entire row, only the WhatsApp/RCS send actions.
 
 ## Editable fields by state
 
@@ -37,14 +39,16 @@ Editing an **Approved** template's editable fields does not mutate the live temp
 
 In **Pending**, surface a "Withdraw and edit" affordance — it calls the Sent withdraw endpoint and moves the template back to Draft.
 
+> The locks above are a **product-governance** choice. The Sent v3 `PUT /v3/templates/{id}` endpoint accepts name/language/category in its request body; whether those fields are truly immutable server-side after first save is not documented in the snapshot and should be verified against the live OpenAPI before relying on it.
+
 ## Webhook vs polling
 
-Sent emits a `template.status_changed` webhook event whenever a template transitions states. See https://docs.sent.dm for the full event schema and subscription setup.
+Sent webhook events follow a top-level `field` + `sub_type` envelope, with `sub_type` formatted as `<field>.<event>` (e.g., `message.delivered`, `message.failed`). Template status changes are inferred to follow the same pattern (e.g., `template.approved`, `template.rejected`, or a single `template.status_changed`) — the snapshot confirms the envelope but does not enumerate template-specific events. **Discover the exact event names via `GET /v3/webhooks/event-types` for your account** and subscribe via `POST /v3/webhooks` with the relevant `event_types` / `event_filters` shape.
 
 Two reasonable UI approaches:
 
 - **Webhook + realtime fanout** (preferred). The backend receives the Sent webhook, fans out to the relevant tenant's realtime channel (Pusher / Ably / Supabase Realtime / WebSocket), and the list row updates in place. Lowest latency, no client polling load. Use when you already have a realtime layer for other reasons.
-- **Short polling** (acceptable fallback). The list view polls `GET /templates?status=pending` every 5–10s while any row is in Pending; stops polling when none remain. Simpler to ship; more network load. Use when you don't yet have realtime infrastructure.
+- **Short polling** (acceptable fallback). The list view polls `GET /v3/templates?status=pending` every 5–10s while any row is in Pending; stops polling when none remain. Simpler to ship; more network load. Use when you don't yet have realtime infrastructure.
 
 Do *not* poll per-row — always poll the list filter — and do not poll forever. Cap at e.g. 30 min after submit; beyond that, the tenant must refresh.
 
@@ -52,7 +56,7 @@ Do *not* poll per-row — always poll the list filter — and do not poll foreve
 
 Two distinct rejection sources, and the UI should render them differently:
 
-- **Meta-surfaced rejection.** The `rejection_reason` Sent forwards from Meta's `template.message_template_status_update` event. Render this as a sticky banner with the human-readable reason on top, the raw Meta enum (e.g. `INVALID_FORMAT`, `ABUSIVE_CONTENT`, `INCORRECT_CATEGORY`) collapsed by default, and a Sent-maintained remediation hint mapped from the enum.
+- **Meta-surfaced rejection.** The `rejection_reason` Sent forwards from Meta's template-status update. Render this as a sticky banner with the human-readable reason on top, the raw Meta enum (e.g. `INVALID_FORMAT`, `ABUSIVE_CONTENT`, `INCORRECT_CATEGORY`) collapsed by default, and a Sent-maintained remediation hint mapped from the enum.
 - **Sent-surfaced rejection.** When Sent's own pre-submission validation (the server-side mirror of the matrix) rejects the payload before forwarding to Meta. Render with a different icon and label ("Caught by Sent before submission") so tenants don't think Meta reviewed the template.
 
 Never show the raw Meta JSON — it's noisy and changes shape. Always go through the Sent-normalized rejection-reason API.
@@ -70,4 +74,4 @@ For Approved templates, "resubmit" is really "submit a new version" — covered 
 
 ## Silent re-categorization
 
-Meta may re-categorize an Approved template (most commonly Utility → Marketing) without changing its status. Sent surfaces this as a `template.recategorized` event with the old and new categories. The list-row UI should render a one-time dismissible banner ("Meta moved this template to Marketing — it will now bill at marketing rates"). Tenants who miss this end up surprised by billing. See the `template-builder-ui` SKILL.md for the editor-side treatment.
+Meta may re-categorize an Approved template (most commonly `UTILITY` → `MARKETING`) without changing its status. If Sent surfaces this (event name not enumerated in the snapshot — verify against `GET /v3/webhooks/event-types`), the list-row UI should render a one-time dismissible banner ("Meta moved this template to Marketing — it will now bill at marketing rates"). Tenants who miss this end up surprised by billing. See the `template-builder-ui` SKILL.md for the editor-side treatment.

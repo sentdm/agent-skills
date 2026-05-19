@@ -12,8 +12,9 @@ Verified against Sent sources:
 
 Review notes:
 - Sent docs define templates across SMS, WhatsApp, and RCS, and state that WhatsApp templates require Meta approval.
-- Sent docs verify statuses Draft, Pending, Approved, and Rejected.
-- Treat WhatsApp category rules, rejection reasons, PAUSED status, and Cloud API payloads as Meta-side policy/context unless Sent API responses expose them.
+- Sent's surfaced template statuses are `APPROVED`, `PENDING`, `REJECTED` (snapshot Template Models section).
+- Sent's three template categories are `UTILITY`, `MARKETING`, `AUTHENTICATION` — no others.
+- Treat WhatsApp category rules, rejection reasons, the Meta-only `PAUSED` state, and Cloud API payloads as Meta-side policy/context. Sent does not surface `PAUSED`.
 -->
 
 # WABA template author
@@ -115,7 +116,7 @@ Use Sent’s template API for creation and lifecycle management. The verified op
 | Update template | `PUT /v3/templates/{id}` | Revise name, category, language, definition, or submit for review. |
 | Delete template | `DELETE /v3/templates/{id}` | Delete the Sent template, optionally deleting from Meta where supported. |
 
-Use Sent’s documented statuses in user-facing instructions: Draft, Pending, Approved, and Rejected. If Meta returns additional statuses for a WhatsApp account, quote them as Meta-side evidence rather than Sent-global statuses.
+Use Sent’s documented template statuses in user-facing instructions: `PENDING`, `APPROVED`, `REJECTED` (per the Sent docs snapshot, Template Models section). Sent does **not** surface `PAUSED` — that is Meta-side only. If Meta returns additional statuses for a WhatsApp account, quote them as Meta-side evidence rather than Sent-surfaced statuses.
 
 ### 6. Add variable samples before submission
 
@@ -149,7 +150,7 @@ Do not omit sample values because the placeholders are obvious. Review and test 
 
 Do not treat Meta Cloud API payload examples as the Sent API contract. Use Sent `/v3/templates` for Sent integrations.
 
-Do not introduce `PAUSED` as a Sent template status unless the account’s Sent API/event payload returns it.
+Do not introduce `PAUSED` as a Sent template status. Sent surfaces only `APPROVED`, `PENDING`, and `REJECTED` — PAUSED is Meta-side and is not reflected in the Sent template status. When Meta pauses, the Sent status stays as it was, and individual sends start failing instead — diagnose via `sent-skills:messaging-performance-analyzer`.
 
 Do not rewrite a rejected template without reading the actual rejection reason when available.
 
@@ -161,7 +162,7 @@ Do not rewrite a rejected template without reading the actual rejection reason w
 - [ ] Every variable has a realistic sample value.
 - [ ] Component choices match the selected channel and use case.
 - [ ] Sent template API endpoints are used for create/list/get/update/delete.
-- [ ] Status handling uses Draft, Pending, Approved, and Rejected unless account evidence shows more.
+- [ ] Status handling uses only Sent's surfaced set — `APPROVED`, `PENDING`, `REJECTED` (no `PAUSED`).
 - [ ] Rejection fixes map to observed reasons, not generic rewrites.
 - [ ] Approved templates are tested through Sent sending with `template.id` before broad rollout.
 
@@ -192,7 +193,5 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- Meta statuses such as `PAUSED` were not verified as Sent template statuses.
-- Exact category-pricing behavior and Meta rejection-code semantics are external policy context, not Sent API facts.
-- The exact Sent template request schema fields should be rechecked against the live OpenAPI before generating production payloads.
-- Cloud API endpoint examples belong in Meta-specific references and should not replace Sent `/v3/templates` usage.
+- Exact category-pricing behavior and Meta rejection-code semantics are external Meta policy context, not Sent API facts.
+- The Sent template schema is documented in `references/_inputs/sent-docs-v3-2026-05-19.md` (Template Models section); cross-check against the live OpenAPI when promoting code to production.

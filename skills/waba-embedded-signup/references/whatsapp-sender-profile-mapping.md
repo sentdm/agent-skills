@@ -1,19 +1,38 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Profile (Sender Profile) model; Idempotency; Webhook payload format; Dashboard pages → API endpoints map; What is NOT in v3 docs) -->
+
 # WhatsApp ↔ Sent Sender Profile Mapping
 
 How Meta-side entities created during Embedded Signup map onto Sent's Sender Profile model. Read this before deciding how many profiles to create per tenant, or when debugging why a webhook landed on the wrong profile.
 
+For the broader multi-channel architecture (one profile owns SMS + WhatsApp + RCS halves; how to split tenants across profiles), see `sent-skills:sender-profile-architect`.
+
 ## The entities
 
 **Meta side:**
-- **Business Manager** — the tenant's legal/operational umbrella in Meta Business Suite.
+- **Business Manager / Business Portfolio** — the tenant's legal/operational umbrella in Meta Business Suite.
 - **WABA (WhatsApp Business Account)** — owns templates and phone numbers; the unit Meta bills.
 - **Phone Number** — a single E.164 number registered for Cloud API on a WABA.
-- **System User** — the long-lived identity that holds the access token used to call Graph API on behalf of the tenant.
+- **System User** — long-lived identity holding the access token used to call Graph API on behalf of the tenant.
 
-**Sent side:**
-- **Sender Profile** — the tenant's unified sending identity across SMS / WhatsApp / RCS. Owns one API key. (See top-level `references/sent-glossary.md`.)
-- **Channel config** — the per-channel block on a profile. The WhatsApp channel config holds `waba_id`, `phone_number_id`, vault-refs for the access token and registration PIN.
-- **Webhook routing** — Sent uses `phone_number_id` from inbound Meta payloads to route events back to the right profile's MDR stream.
+**Sent side (v3 — schema verified against snapshot):**
+
+A Sender Profile is:
+
+| Field | Type | Notes |
+|---|---|---|
+| `id` | UUID | The Sent-side primary key. |
+| `name` | string | Display name. |
+| `icon` | string \| null | URL. |
+| `description` | string \| null | |
+| `short_name` | string \| null | |
+| `role` | `admin` \| `billing` \| `developer` \| null | Caller's role on this profile. |
+| `status` | `incomplete` \| `pending_review` \| `approved` \| `rejected` \| null | Setup status. |
+| `created_at` | ISO8601 | |
+| `settings` | object | `{default_channel, webhook_url, timezone, language}` |
+
+There is **no public `channels.whatsapp` sub-resource** on the Profile in the v3 docs snapshot. Per-channel WhatsApp wiring (WABA ID, phone-number ID) is performed via the dashboard Channels page, which is explicitly listed as "dashboard config; not directly in v3 API". Treat WABA and phone-number IDs as external provider identifiers that the dashboard binds to the profile; do not invent v3 endpoints to mutate that binding.
+
+Auth in v3 is a single header — `x-api-key: <UUID>` — at the account level. `x-sender-id` is **v2 legacy** and is exposed per profile in the dashboard for routing, not as a v3 API auth requirement.
 
 ## ASCII map
 
@@ -22,85 +41,65 @@ Tenant
   │
   ├── Business Manager (1)
   │     │
-  │     ├── WABA #A ────────────────────────► Sender Profile P1
-  │     │     ├── Phone +1 555 0100  ◄────────┤  channels.whatsapp
-  │     │     ├── Phone +1 555 0101  ◄──┐     │  { waba_id: A,
-  │     │     └── Templates              │    │    phone_number_id: ...100,
-  │     │                                │    │    token_ref, pin_ref }
+  │     ├── WABA #A ────────────────────────► Sender Profile P1 (id, status=approved)
+  │     │     ├── Phone +1 555 0100  ◄────────┤  (dashboard-bound)
+  │     │     ├── Phone +1 555 0101  ◄──┐     │
+  │     │     └── Templates              │    │
   │     │                                │    │
   │     │                                └────► Sender Profile P2
-  │     │                                     │  channels.whatsapp
-  │     │                                     │  { waba_id: A,
-  │     │                                     │    phone_number_id: ...101 }
+  │     │                                     │  (different phone, same WABA)
   │     │
   │     └── WABA #B ────────────────────────► Sender Profile P3
-  │           └── Phone +44 20 7946 0000 ◄────┤  channels.whatsapp
-  │                                            │  { waba_id: B,
-  │                                            │    phone_number_id: ... }
+  │           └── Phone +44 20 7946 0000 ◄────┤
   │
   └── System User (1) ──► token held in vault, referenced by all of P1/P2/P3
 ```
 
-## Cardinality rules
+## Cardinality rules (operational, not enforced by v3 API)
 
 | Relationship | Cardinality | Notes |
 |---|---|---|
-| Business Manager → WABA | 1 : N | A tenant may operate multiple WABAs (e.g. per region or brand) under one Business Manager. |
+| Business Manager → WABA | 1 : N | A tenant may operate multiple WABAs (per region or brand). |
 | WABA → Phone Number | 1 : N | Up to 25 per WABA per Meta's current limits. |
-| Phone Number → Sender Profile | 1 : 1 | **Hard rule.** Each phone number routes to exactly one profile. Sharing a number across profiles breaks webhook routing. |
-| WABA → Sender Profile | 1 : N | Multiple profiles may reference the same WABA, each pinning a different `phone_number_id`. Useful when one tenant runs separate brands off the same WABA. |
+| Phone Number → Sender Profile | 1 : 1 | **Hard rule.** Each phone number routes to exactly one profile; sharing breaks inbound routing. |
+| WABA → Sender Profile | 1 : N | Multiple profiles may bind to the same WABA, each pinning a different phone number. |
 | System User → WABA | 1 : N | One System User token can hold scopes for many WABAs. |
-| Sender Profile → WhatsApp channel | 0 : 1 | A profile has at most one WhatsApp half. SMS / RCS halves are independent. |
+| Sender Profile → WhatsApp wiring | 0 : 1 | A profile has at most one WhatsApp binding. SMS / RCS bindings are independent. |
 
 ## What `POST /v3/profiles/{id}/complete` actually does
 
-Profile completion is the Sent-side commit that takes a profile from `draft` to `active` for a given channel. For WhatsApp:
+`POST /v3/profiles/{id}/complete` is confirmed in the v3 snapshot as the profile-completion endpoint. It supports `Idempotency-Key` and is classified as a sensitive endpoint (10 req/min, burst 5). It transitions the profile out of `incomplete` once prerequisites are met.
 
-1. Validates that `(waba_id, phone_number_id)` is not already claimed by another profile in this tenant.
-2. Persists `phone_number_id` into the profile's routing index — this is what lets Sent's webhook ingest find the right profile when Meta delivers an inbound event.
-3. Stores `token_ref` and `pin_ref` as opaque vault references; the values themselves never enter the profile record.
-4. Subscribes Sent's app to the WABA (idempotent — safe to re-call).
-5. Returns the profile with `channels.whatsapp.state = active`.
+The exact request/response shape for the completion call (which fields must be present, what gets persisted) is **not enumerated in the v3 snapshot**. Treat the completion call as a commit: prerequisites (KYC + channel config done via the dashboard) must already be true; the endpoint signals "I am ready". Check the live OpenAPI at [docs.sent.dm](https://docs.sent.dm) before wiring a tenant-facing integration.
 
-Idempotent on `(profile_id, channel)`: calling again with corrected fields updates in place. See [docs.sent.dm](https://docs.sent.dm) for the live request/response schema.
+## Routing inbound events back to a profile
 
-## How webhook events flow back
+Sent's webhook envelope (verified) is:
 
-```
-Meta Cloud API ──signed POST──► Sent webhook ingest
-                                     │
-                                     │ verify X-Hub-Signature-256
-                                     │ extract entry[].changes[].value.metadata.phone_number_id
-                                     │
-                                     ▼
-                              Phone-number-id → Sender Profile lookup
-                                     │
-                                     ▼
-                              Tenant MDR stream + webhook to tenant URL
+```json
+{
+  "field": "message",
+  "sub_type": "message.delivered",
+  "timestamp": "2026-01-15T10:35:00+00:00",
+  "payload": { "account_id": "...", "message_id": "...", "channel": "whatsapp", "inbound_number": "+1...", "outbound_number": "+1...", "template_id": "..." }
+}
 ```
 
-The routing key is `phone_number_id`, not `waba_id`. This is why the "Phone Number → Sender Profile" relation must stay 1:1 — there's nowhere else in the payload to disambiguate.
+For WhatsApp inbound, the payload carries `account_id`, `message_id`, and the inbound/outbound E.164 numbers. WhatsApp-specific sub-types beyond the generic `message.*` family (e.g., template-status events) are not enumerated in the snapshot — discover them empirically against your account by subscribing broadly and observing what arrives.
 
 ## Detaching a WABA without losing message history
 
-You will eventually need to remove a WABA from a profile (tenant churns, swaps providers, etc.) **without** wiping the historical MDRs for compliance.
+There is no v3 API endpoint documented for detaching a WhatsApp binding from a profile. The Channels page in the dashboard is the surface. Operationally:
 
-1. Set `channels.whatsapp.state = detaching` on the profile (blocks new sends).
-2. Wait for in-flight messages to settle (delivery webhooks drain within 24h for normal traffic, 48h for slower carriers).
-3. `DELETE /v3/profiles/{id}/channels/whatsapp` — soft-deletes the channel config, keeps MDR history searchable by `wamid` and `phone_number_id`.
-4. Unsubscribe Sent's app from the WABA: `DELETE /v23.0/{waba_id}/subscribed_apps` (Graph API).
-5. Optionally archive the System User token if no other profile references it.
+1. Stop sending on the profile.
+2. Wait for in-flight deliveries to settle (delivery webhooks drain within ~24h for normal traffic, longer for slower carriers).
+3. Use the dashboard Channels page to remove the WhatsApp binding.
+4. On the Meta side, unsubscribe your Tech Provider app from the WABA via Graph API if you held the subscription directly.
 
-The MDR history stays queryable; only the *send* path is removed. Re-attaching later goes through the normal Embedded Signup flow and produces a fresh channel config.
+Historical MDRs remain queryable by `message_id` — message history is not deleted when the binding is removed.
 
 ## Migrating a phone number between WABAs
 
-Tenants sometimes need to move a phone number from one WABA to another (consolidating, separating brands, or switching from a self-served WABA to a Tech-Provider-managed one). Meta supports this; Sent treats it as a profile re-mapping.
+Meta supports moving a phone number between WABAs and the phone-number ID is stable across the move. On Sent's side, the dashboard Channels page is the supported surface to re-bind. Since the v3 docs do not publish the channel-config mutation endpoint, do not encode a `PATCH /v3/profiles/{id}/channels/whatsapp` call in client integrations — operate via the dashboard until the API is published.
 
-1. **In Meta:** initiate "Migrate phone number" in WhatsApp Manager on the *destination* WABA, target the source WABA + number. Meta sends an OTP to the registered number to confirm.
-2. **Post-migration:** the *same* `phone_number_id` now belongs to the new WABA. The number, display name, quality rating, and existing `wamid` history all survive. Templates do **not** transfer — they live on the WABA.
-3. **In Sent:** update the affected profile's channel config: `PATCH /v3/profiles/{id}/channels/whatsapp { waba_id: <new> }`. The `phone_number_id` is unchanged, so webhook routing is unaffected.
-4. **Subscribe Sent's app to the new WABA** (`POST /{new_waba_id}/subscribed_apps`) — the old subscription does not follow the number.
-5. **Re-author or re-clone any templates** the tenant used; their old approvals do not migrate.
-
-The `phone_number_id` stability is what makes this clean for Sent — webhook routing and MDR history are keyed on it, so message history pre- and post-migration sits in one searchable timeline.
+Templates are WABA-scoped and do **not** transfer with the phone number — re-author or re-import on the new WABA.

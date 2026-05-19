@@ -8,7 +8,7 @@ Verified against Sent sources:
 - https://docs.sent.dm/start/quickstart/dashboard-walkthrough
 - https://docs.sent.dm/start/quickstart/channel-setup
 - https://docs.sent.dm/reference/api
-- Sent v3 OpenAPI: /v3/profiles, /v3/profiles/{profileId}, /v3/profiles/{profileId}/complete, /v3/webhooks, /v3/webhooks/{id}/test, /v3/webhooks/{id}/events, /v3/webhooks/{id}/rotate-secret
+- Sent v3 OpenAPI: /v3/profiles, /v3/profiles/{profileId}, /v3/profiles/{profileId}/complete, /v3/webhooks, /v3/webhooks/{id}/test, /v3/webhooks/{id}/rotate-secret
 
 Review notes:
 - Sent docs verify Sender Profiles and WhatsApp configuration status in the dashboard, but the extracted Sent docs/API did not expose a public Sent-specific Embedded Signup endpoint.
@@ -86,7 +86,7 @@ Use `/v3/profiles/{profileId}/complete` when prerequisites are ready and API com
 
 ### 6. Verify webhook readiness
 
-Use Sent webhook endpoints to confirm event delivery. Verify the webhook exists, the relevant event types are available, and a test event reaches the customer endpoint. Inspect `/v3/webhooks/{id}/events` when customer logs and Sent state disagree.
+Use Sent webhook endpoints to confirm event delivery. Verify the webhook exists, the relevant event types are available, and a test event reaches the customer endpoint via `POST /v3/webhooks/{id}/test`.
 
 Rotate webhook secrets only when needed and coordinate deployment, because secret rotation invalidates the old secret immediately.
 
@@ -164,7 +164,7 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- A public Sent Embedded Signup endpoint was not verified in the extracted Sent docs/API.
-- Required Meta app type, Tech Provider/Solution Partner status, granular scopes, and Graph endpoint sequence are external Meta claims, not Sent API facts in this pass.
+- Sent does not expose a public Embedded Signup endpoint; WhatsApp connection is dashboard-only via Channels → WhatsApp (confirmed against Sent v3 docs snapshot, 2026-05-19; the Channels page is explicitly listed as "dashboard config; not directly in v3 API").
+- Required Meta app type, Tech Provider/Solution Partner status, granular scopes, and Graph endpoint sequence are external Meta claims, not Sent API facts.
 - Mandatory direct phone-number registration or WABA subscription by the customer app depends on integration path and was not verified as a universal Sent requirement.
-- Exact Sent webhook payload fields for WhatsApp sender events were not verified; use account event types and observed payloads.
+- Sent's webhook envelope is confirmed as `{field, sub_type, timestamp, payload}` with sub-types of the form `<field>.<event>` (e.g., `message.delivered`). WhatsApp-specific sub-types are not enumerated in the snapshot — discover them empirically against your account.

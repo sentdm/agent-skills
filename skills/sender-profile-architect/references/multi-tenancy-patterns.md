@@ -1,71 +1,114 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Authentication, Rate limits, Idempotency, Webhook payload format, Webhook model (config), Profile (Sender Profile) model, Onboarding state machine) -->
+
 # Multi-Tenancy Patterns for Messaging Apps on Sent — Reference
 
-Supporting reference for `sender-profile-architect`. Patterns that are *specific to messaging workloads* on Sent — high write volume, webhook fan-in from three channels, and carrier / Meta / Google compliance constraints. Generic multi-tenant SaaS theory is covered exhaustively elsewhere; this doc only captures what changes when SMS, WhatsApp, and RCS are involved.
+Supporting reference for `sender-profile-architect`. Patterns that are *specific to messaging workloads* on Sent — high write volume, webhook fan-in across SMS/WhatsApp/RCS, and the compliance constraints carriers, Meta, and Google impose. Generic multi-tenant SaaS theory is covered exhaustively elsewhere; this doc only captures what changes when SMS, WhatsApp, and RCS run through Sent.
 
 ## What a Sender Profile owns
 
-A Sender Profile is *one tenant's sending identity* across every channel that tenant uses. At minimum:
+A Sender Profile is *one tenant's sending identity* across the channels that profile uses. It carries `name`, `description`, `short_name`, `status` (`incomplete | pending_review | approved | rejected`), and a `settings` block of `{default_channel, webhook_url, timezone, language}`. Each channel attaches separately:
 
-- One API key (the tenant authenticates as the profile)
-- Zero or one SMS sender — phone number(s) or short code, plus a TCR brand + campaign registration
-- Zero or one WhatsApp sender — a WABA, one or more phone numbers, a System User token
-- Zero or one RCS sender — an RBM agent with verified domains and a fallback policy
+- **SMS** — TCR Brand (`/v3/brands`) + at least one Campaign (`/v3/brands/{brandId}/campaigns`), plus one or more phone numbers / short codes.
+- **WhatsApp** — Meta WABA + WABA phone numbers (configured via the Sent dashboard / Channels page).
+- **RCS** — Google RBM agent (not self-service; via Sent support).
 
-Each tenant may have multiple profiles (one per brand, region, or use case). The profile is the routing key everything else attaches to.
+A tenant may have multiple profiles (one per brand, region, or use case). Auth is a single account-level `x-api-key`; that key can operate on any profile the account owns.
 
 ## Webhook Routing (the hot path)
 
-Each channel pushes inbound events on its own stream with its own routing key. The job is to converge them on the right Sender Profile:
+Sent fans channel events into a unified payload shape:
 
-| Channel | Inbound from | Routing key in the payload | Used to find |
-|---|---|---|---|
-| SMS | Carrier (via Sent) | Sender phone / short code + TCR campaign ID | the profile's SMS sender |
-| WhatsApp | Meta | WABA ID + `phone_number_id` | the profile's WhatsApp sender |
-| RCS | Google RBM (via Sent) | `agentId` | the profile's RCS sender |
+```json
+{
+  "field": "message",
+  "sub_type": "message.delivered",
+  "timestamp": "2026-01-15T10:35:00+00:00",
+  "payload": {
+    "account_id": "<UUID>",
+    "message_id": "<UUID>",
+    "message_status": "DELIVERED",
+    "channel": "sms",
+    "inbound_number": "+1...",
+    "outbound_number": "+1...",
+    "template_id": "<UUID>"
+  }
+}
+```
 
-Whatever you use to look these up — cache, store, or service — the contract is the same: resolve the routing key, find the Sender Profile, enqueue per profile, ACK the webhook fast. Synchronous business logic in the webhook handler kills throughput because all three platforms retry on slow / 5xx responses (Meta times out around 15s, Google around 10s, carriers vary).
+Top-level fields: `field`, `sub_type`, `timestamp`, `payload`. `sub_type` follows `<field>.<event>` (e.g., `message.delivered`, `message.failed`, `message.read`).
+
+Routing back to a Sender Profile uses what your application persisted at send time, joined on stable IDs in the payload:
+
+| Channel | Verified payload fields | Used to find |
+|---|---|---|
+| All | `payload.message_id` | the profile that owns this outbound message |
+| All | `payload.account_id` | the customer account |
+| All | `payload.channel` + `payload.outbound_number` | the configured sender |
+| All | `payload.template_id` | the template / its owning profile |
+
+Narrow webhook subscriptions with `event_filters`:
+
+```json
+"event_filters": { "message": ["delivered", "failed"] }
+```
+
+Shape: `{<parent>: [<sub_type_suffix>, ...]}`. Combine with `event_types: ["message"]` to subscribe to the `message` parent and only fire on the listed sub-types.
+
+ACK fast (≤ webhook `timeout_seconds`, default 30s, max 120s; Sent retries up to `retry_count`, default 3, max 5). Synchronous business logic in the webhook handler kills throughput because three platforms upstream all retry on slow / 5xx responses.
 
 Two failure modes to design out:
 
-- **Cold routing key.** A webhook arrives for a phone number, `phone_number_id`, or `agentId` that doesn't map to a known profile yet (the tenant added a number in Meta Business Manager out-of-band, or a TCR campaign moved between brands). Log, return 200, alert ops — don't drop the event.
-- **Slow routing-key lookup.** If lookups go to cold storage every time, they'll be the bottleneck under spike load. Cache aggressively, but back the cache with a durable store — pods that don't have the cache primed must still resolve correctly.
+- **Cold routing key.** A webhook arrives for an `outbound_number` or `template_id` you haven't mapped (the tenant added a number out-of-band, or a template was created in another environment). Log, return 200, alert ops — don't drop the event.
+- **Slow routing-key lookup.** Cache the `message_id` → profile mapping aggressively, but back it with durable storage so cold pods resolve correctly.
 
 ## Per-Channel Rate-Limit Accounting
 
-Limits exist at three layers on every channel. Track per-channel; bill at the profile.
+You account for limits at four layers. Track per-channel; bill at the profile.
 
-| Channel | Carrier / platform limit you must respect | Where it comes from |
+| Source | Limit | Where it comes from |
 |---|---|---|
-| **SMS** | Campaign TPS per carrier (assigned after TCR vetting) | TCR + carrier reconciliation; periodic re-fetch |
-| **SMS** | Daily volume caps imposed by carriers | Carrier-specific; surfaced by Sent |
-| **WhatsApp** | Phone-number tier (1K / 10K / 100K / unlimited business-initiated conversations per 24h) | Meta — readable from the phone-number record |
-| **WhatsApp** | Cloud API throughput (CPS) | Meta-defined, tier-derived |
-| **RCS** | Agent QPS | Google RBM |
-| **All** | Your per-profile quota — whatever you actually sell | Your billing layer |
+| **Sent — standard endpoints** | 200 req/min, burst 50 | Sent API gateway |
+| **Sent — sensitive endpoints** | 10 req/min, burst 5 (e.g., `POST /v3/webhooks/{id}/rotate-secret`, `POST /v3/users`, `POST /v3/profiles/{id}/complete`) | Sent API gateway |
+| **Sent — message sending tier** | Starter 60/min · Growth 300/min · Enterprise custom | Sent plan tier |
+| **Sent — webhook test** | 60/min | Sent API gateway |
+| **SMS — TCR campaign TPS** | Per-campaign throughput, assigned after vetting | TCR + carrier reconciliation |
+| **WhatsApp — phone-number tier** | 1K / 10K / 100K / unlimited business-initiated conversations per 24h, plus Cloud API CPS | Meta — readable from the phone-number record |
+| **RCS — agent QPS** | Google RBM | Google |
+| **Your per-profile quota** | Whatever you actually sell | Your billing layer |
 
-Bill against the Sender Profile, not the tenant — a tenant with three brands gets three meters.
+Rate-limit responses include `X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, and (on 429) `Retry-After`. The error code on 429 is `BUSINESS_002`.
 
-## Channel-Specific Idempotency
+Bill against the Sender Profile, not the customer account — an account with three brands gets three meters.
 
-Outbound message sends should be idempotent on the tuple `(sender profile, channel, client_message_id)`. Persist the intent to send *before* the upstream call — if the channel API succeeds but your write fails, a retry would otherwise duplicate.
+## Idempotency
 
-Inbound delivery events are idempotent on different natural keys per channel — coalesce accordingly:
+Header: `Idempotency-Key: <key>` where the key matches `^[a-zA-Z0-9_-]{1,255}$`. Cached for **24 hours**, scoped **per customer account**.
 
-| Channel | Inbound event coalesces on |
-|---|---|
-| SMS | `(carrier_message_id, status)` |
-| WhatsApp | `(wamid, status)` |
-| RCS | `(messageId, status)` |
+Concurrent requests with the same key → second returns `409 CONFLICT_001`. Replays carry `Idempotent-Replayed: true` and `X-Original-Request-Id: <original>` headers.
+
+**Same key + different payload → returns the cached response for the *first* payload, not a new one.** Use a unique key per distinct operation. A safe pattern: hash `(profile_id, operation, client_intent_id)` into the key so a re-send of the same business intent is idempotent but a different intent on the same profile is not.
+
+Supported on all profile mutations:
+- `POST /v3/profiles`, `PATCH /v3/profiles/{id}`, `DELETE /v3/profiles/{id}`
+- `POST /v3/profiles/{id}/complete`
+
+And on every other mutation endpoint listed in the snapshot (`/v3/messages`, `/v3/contacts`, `/v3/templates`, `/v3/brands`, `/v3/brands/{id}/campaigns`, `/v3/webhooks`, `/v3/users`).
+
+Sandbox mode (`"sandbox": true` in the body) stacks with idempotency — validates the request, returns a realistic fake response, and caches it for 24 hours. Useful for CI per-tenant smoke tests.
+
+## Outbound Message Idempotency
+
+Outbound message sends should also be idempotent on the tuple `(profile_id, channel, client_message_id)` at the application layer. Persist the intent to send *before* the upstream `POST /v3/messages` — if the call succeeds but your write fails, a retry would otherwise duplicate. Pair this with a stable `Idempotency-Key` on the Sent request itself so Sent collapses the duplicate even if your row write reaches Sent first.
 
 ## State Reconciliation (per channel)
 
-Don't rely on webhooks alone. Every channel can silently drift:
+The Profile resource exposes a coarse `status` (`incomplete | pending_review | approved | rejected`). Per-channel readiness (TCR vetting score, WhatsApp messaging tier, RBM launch state) is not in this snapshot — re-fetch from the dashboard or upstream APIs on a schedule:
 
-- **TCR / SMS** — campaign vetting score updates and carrier-level filtering changes do not always fire webhooks. Reconcile against TCR + carrier APIs on a schedule (daily for healthy campaigns, hourly when state was recently changing).
+- **TCR / SMS** — campaign vetting score updates and carrier-level filtering changes don't always fire webhooks. Reconcile daily for healthy campaigns, hourly when state was recently changing.
 - **WhatsApp** — phone-number quality rating and messaging tier change without webhooks. Re-fetch every few hours; alert on transitions.
-- **RCS** — agent launch state and carrier rollout status update silently. Re-fetch daily for `launched` agents and more often during initial verification rollout.
+- **RCS** — agent launch state and carrier rollout status update silently. Re-fetch daily for launched agents and more often during initial verification.
 
-Track when each channel was last reconciled so dashboards can show how stale each profile is.
+Track when each channel was last reconciled so dashboards can show how stale each profile is. Don't conflate this internal staleness with Sent's `status` field.
 
 ## Channel-Specific Anti-Patterns
 
@@ -81,6 +124,6 @@ When a tenant churns, run the per-channel teardown — not just a state flag:
 
 - **SMS** — deactivate the TCR campaign(s), release the phone number(s) per Sent's release flow.
 - **WhatsApp** — unsubscribe your app from the WABA, revoke the System User token.
-- **RCS** — unlaunch / suspend the RBM agent.
+- **RCS** — unlaunch / suspend the RBM agent (via Sent support).
 
-Then mark the Sender Profile archived. Schedule message-content deletion per your retention policy.
+Then `DELETE /v3/profiles/{id}` to soft-delete the profile (use an `Idempotency-Key`). Disable or delete webhook subscriptions that fan into this profile. Schedule message-content deletion per your retention policy.

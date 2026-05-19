@@ -1,19 +1,21 @@
 ---
 name: sender-profile-architect
-description: Designs Sent Sender Profile architecture for multi-tenant, multi-brand, or multi-channel messaging systems, including profile boundaries, profile-scoped credentials, webhooks, compliance inheritance, and channel readiness. Use when a user says sender profile, x-sender-id, profile setup, multi-tenant messaging, brand isolation, department sender, webhook routing, tenant offboarding, or asks how to model SMS, WhatsApp, and RCS senders in Sent.
+description: Designs Sent Sender Profile architecture for multi-tenant, multi-brand, or multi-channel messaging systems, including profile boundaries, account-level API key blast radius, webhooks, compliance inheritance, and channel readiness. Use when a user says sender profile, x-sender-id, profile setup, multi-tenant messaging, brand isolation, department sender, webhook routing, tenant offboarding, or asks how to model SMS, WhatsApp, and RCS senders in Sent.
 ---
 
 <!--
-Verified against Sent sources:
+Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections: Authentication, Profile (Sender Profile) model, Webhook payload format, Webhook model (config), Idempotency, Rate limits, User roles).
+
+Additional verified sources:
 - https://docs.sent.dm/start/quickstart/dashboard-walkthrough
 - https://docs.sent.dm/start/quickstart/channel-setup
 - https://docs.sent.dm/reference/api
 - Sent v3 OpenAPI: /v3/profiles, /v3/profiles/{profileId}, /v3/profiles/{profileId}/complete, /v3/brands, /v3/brands/{brandId}/campaigns, /v3/webhooks, /v3/webhooks/{id}/events, /v3/webhooks/{id}/test, /v3/webhooks/{id}/rotate-secret
 
 Review notes:
-- Sent dashboard docs verify Sender Profiles, display name, brand description, x-sender-id, and channel configuration status.
-- Sent v3 OpenAPI verifies profile CRUD and profile completion. It does not prove a strict one-API-key-per-profile model, so this skill uses “profile-scoped credentials” rather than stronger claims.
-- Treat routing-key tables, tenant state machines, and webhook correlation strategies as application architecture guidance unless a field is present in Sent responses/events.
+- v3 auth is a single account-level x-api-key. x-sender-id is per-profile (visible in dashboard) but is v2 legacy.
+- Profile status enum is incomplete | pending_review | approved | rejected. Anything finer-grained is application-level.
+- Treat routing-key tables and lifecycle states as application architecture unless a field is present in Sent responses/events.
 -->
 
 # Sender profile architect
@@ -26,7 +28,7 @@ Good profile architecture prevents three recurring failures: messages sent from 
 
 ## When to use
 
-Use this skill when the user asks how to create Sender Profiles, split one customer into multiple senders, model a marketplace or ISV, isolate brands, route webhooks, handle profile-scoped API credentials, complete profile setup, or safely offboard a tenant. Use it whenever the request mentions `x-sender-id`, Sender Profile, profile completion, multi-tenant messaging, brand hierarchy, SMS/WhatsApp/RCS sender setup, or webhook routing.
+Use this skill when the user asks how to create Sender Profiles, split one customer into multiple senders, model a marketplace or ISV, isolate brands, route webhooks, reason about account-level API key blast radius, complete profile setup, or safely offboard a tenant. Use it whenever the request mentions `x-sender-id`, Sender Profile, profile completion, multi-tenant messaging, brand hierarchy, SMS/WhatsApp/RCS sender setup, or webhook routing.
 
 Do not use this skill to decide 10DLC use cases in detail, write WhatsApp template copy, onboard RCS approval, or analyze delivery failures. Hand those to the related skills once the profile boundary is clear.
 
@@ -85,11 +87,13 @@ Do not invent field names such as `tcr_brand_id` or `waba_phone_id` unless the a
 
 ```text
 sender_profiles
-- sent_profile_id
-- x_sender_id
-- display_name
-- brand_description
-- status_app_level
+- sent_profile_id            -- Sent Profile.id (UUID)
+- x_sender_id                -- per-profile, v2 legacy; useful for dashboard cross-ref
+- name                       -- Sent Profile.name
+- short_name                 -- Sent Profile.short_name
+- description                -- Sent Profile.description
+- sent_status                -- mirrors Sent Profile.status: incomplete|pending_review|approved|rejected
+- status_app_level           -- finer-grained internal lifecycle (do not conflate with sent_status)
 - sms_ready_app_level
 - whatsapp_ready_app_level
 - rcs_ready_app_level
@@ -97,8 +101,8 @@ sender_profiles
 sender_profile_resources
 - sent_profile_id
 - channel
-- sent_resource_id
-- provider_resource_type
+- sent_resource_id           -- e.g., /v3/brands/{brandId}, /v3/brands/{brandId}/campaigns/{id}
+- provider_resource_type     -- e.g., tcr_brand, tcr_campaign, waba, waba_phone, rbm_agent
 - provider_resource_id
 - status_last_seen_at
 ```
@@ -176,7 +180,6 @@ See the top-level `references/sent-glossary.md` for shared Sent terminology.
 
 ## Unverified claims to confirm or remove
 
-- A strict one-API-key-per-profile model was not verified; use “profile-scoped credentials” unless confirmed.
-- Exact Sent webhook event payload routing fields were not verified in the extracted OpenAPI details.
-- Profile states such as `partially_active`, `restricted`, or `restoring` are application-level labels unless Sent returns them.
-- Provider-specific routing keys for WhatsApp/RCS/SMS should not be required unless observed in Sent event payloads or docs.
+- API keys are issued per **customer account** (not per profile); `x-sender-id` is per-profile and visible in the dashboard but is v2 legacy for routing — v3 uses `x-api-key` alone. Design key blast-radius around the account, not the profile.
+- Sent's profile `status` enum is `incomplete | pending_review | approved | rejected`. If your application tracks finer-grained internal lifecycle states (e.g. `partially_active`, `restricted`, `restoring`), they should not be conflated with the Sent profile `status` field — label them as application states.
+- Provider-specific routing keys for WhatsApp/RCS/SMS (e.g., `phone_number_id`, `agentId`, TCR campaign ID) should not be required as primary routing keys unless observed in Sent event payloads or docs. The verified v3 webhook payload exposes `account_id`, `message_id`, `channel`, `inbound_number`, `outbound_number`, `template_id` — route on those plus a `message_id` → profile map persisted at send time.

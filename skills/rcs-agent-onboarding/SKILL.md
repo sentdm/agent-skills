@@ -118,3 +118,10 @@ A correctly onboarded RCS sender has:
 - `sender-profile-architect` — where `agent_id` and fallback policy attach in the data model
 - `sms-10dlc-registration` — the SMS sender that backs an RCS fallback policy
 - `messaging-performance-analyzer` — for diagnosing capability-mismatch and per-carrier rollout issues after launch
+- See top-level `references/sent-glossary.md` for shared Sent terminology.
+
+## References
+
+- `references/rbm-agent-spec.md` — RBM agent fields, capabilities, lifecycle, fallback option set
+- `references/rcs-launch-evidence-packet.md` — what to gather before initiating carrier handoff
+- `references/rcs-fallback-patterns.md` — when fallback fires, channel arrays, content trimming, webhook signals

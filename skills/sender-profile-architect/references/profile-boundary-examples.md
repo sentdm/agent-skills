@@ -1,8 +1,18 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Authentication, Profile (Sender Profile) model, User roles (org-level), Dashboard pages -> API endpoints map) -->
+
 # Profile Boundary Examples — Reference
 
 Supporting reference for `sender-profile-architect`. Worked examples for "where should the Sender Profile boundary go?" — the question that determines blast radius, billing granularity, and onboarding pain. Each example covers when the boundary makes sense, when it doesn't, ops considerations, and how the choice ripples into 10DLC registration and WABA setup.
 
 The default rule of thumb: **one Sender Profile per legal entity per distinct sending identity**. The examples below are when to break that rule.
+
+## What's confirmed in v3 (read before using the examples)
+
+- **Auth.** A single account-level `x-api-key` operates on every profile the account owns. There is no per-profile API key in v3.
+- **`x-sender-id`.** Visible per-profile in the dashboard (Profiles page maps to `/v3/profiles` endpoints), but is v2 legacy for routing; v3 needs only `x-api-key`. Treat it as a per-profile identifier you can read, not as the auth header.
+- **Profile `status`.** The Sent-side enum is `incomplete | pending_review | approved | rejected`. Anything finer-grained ("partially_active", "restricted", "restoring") is an application-level label.
+- **Org-level user roles.** Owner / Admin / Billing / Developer. Owner is the only role with billing-ownership transfer rights; the Profile resource's per-call `role` field surfaces `admin | billing | developer` (not Owner) for the authenticated user's role in that profile.
+- **10DLC.** Brand and Campaign are first-class Sent resources at `/v3/brands` and `/v3/brands/{brandId}/campaigns` — register them before completing the SMS portion of a profile.
 
 ## 1. One profile per legal entity (single-brand SaaS)
 
@@ -48,7 +58,7 @@ A mid-sized company wants Sales, Support, and Marketing to send under the same o
 **Doesn't pick this when:** the departments truly send identical-looking traffic under one external brand. Splitting buys complexity without changing what carriers see.
 
 **Ops:**
-- Three webhooks, three keys, three sets of templates. Reusable copy (e.g. WhatsApp templates) has to be authored per profile or copied between them.
+- Three webhooks (or one webhook routing on `payload` fields), three sets of templates — but one shared account-level `x-api-key`. Reusable copy (e.g. WhatsApp templates) has to be authored per profile or copied between them.
 - Quota / rate-limit accounting is per profile — Marketing can be throttled without affecting Support.
 - Suspension blast radius is per profile — a Meta quality drop on Marketing doesn't pause Support.
 
@@ -66,8 +76,8 @@ A platform — appointment-booking SaaS, e-commerce host, marketing platform —
 
 **Ops:**
 - Profile provisioning is part of the merchant onboarding flow — this is where the WABA Embedded Signup (`waba-embedded-signup`) and 10DLC registration (`sms-10dlc-registration`) skills get invoked hundreds of times.
-- Webhook fan-in: one Sent webhook per profile is unmanageable at hundreds of profiles. Either configure all profiles to one webhook URL and route on `x-sender-id` / payload (one secret to rotate, larger blast radius), or run per-profile webhooks behind a routing layer.
-- API-key blast radius: a compromised merchant key only affects that merchant. This is the strongest argument for per-tenant profiles.
+- Webhook fan-in: one Sent webhook per profile is unmanageable at hundreds of profiles. Either configure all profiles to one webhook URL and route on payload fields (`payload.account_id`, `payload.outbound_number`, `payload.template_id`, plus a `message_id`-to-profile map you keep at send time), or run per-profile webhooks behind a routing layer. The single-URL pattern has one secret to rotate and a larger blast radius.
+- API-key blast radius: v3 issues a single account-level `x-api-key`, so a compromised key affects every merchant under that account. If per-merchant key isolation is a requirement, give each merchant its own Sent customer account (not just its own profile) — that's the only boundary that produces a distinct API key today.
 - Billing: per-merchant meters fall out of per-profile accounting cleanly.
 
 **10DLC:** each merchant is its own TCR Brand and Campaign. The platform does not register *its own* Brand on behalf of merchants — the merchant signs. Plan for per-merchant TCR vetting time (days, not seconds).

@@ -150,6 +150,8 @@ Use `sent-skills:template-builder-ui` when building the UI that imports or manag
 
 Use `sent-skills:messaging-performance-analyzer` when WhatsApp sends are connected but delivery/read/webhook outcomes are poor.
 
+See the top-level `references/sent-glossary.md` for shared Sent terminology.
+
 ## Suggested bundled references and scripts
 
 | File | Type | Purpose |

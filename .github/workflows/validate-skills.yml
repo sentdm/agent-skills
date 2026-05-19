@@ -1,0 +1,29 @@
+# Workflow safety: this file uses no untrusted inputs (no github.event.*
+# interpolation in run: commands). The only executed command is a static call
+# to the in-repo validator script.
+
+name: validate-skills
+
+on:
+  pull_request:
+    paths:
+      - 'skills/**'
+      - 'scripts/validate-skills.sh'
+      - '.github/workflows/validate-skills.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'skills/**'
+      - 'scripts/validate-skills.sh'
+      - '.github/workflows/validate-skills.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run validator
+        run: bash scripts/validate-skills.sh

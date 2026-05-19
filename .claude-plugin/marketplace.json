@@ -1,0 +1,14 @@
+{
+  "name": "sent-skills",
+  "owner": { "name": "Sent" },
+  "metadata": {
+    "description": "WhatsApp Business API skills for builders on Sent."
+  },
+  "plugins": [
+    {
+      "name": "sent-skills",
+      "source": { "source": "github", "repo": "sentdm/agent-skills" },
+      "description": "Five domain skills for WABA builders: template authoring & classification, message delivery report analysis, multi-tenant Sender Profile architecture, tenant-facing template builder UI, and Meta Embedded Signup integration."
+    }
+  ]
+}

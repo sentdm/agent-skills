@@ -1,0 +1,11 @@
+{
+  "name": "sent-skills",
+  "description": "WhatsApp Business API skills for builders on Sent — templates, delivery analytics, multi-tenancy, embedded signup.",
+  "version": "0.1.0",
+  "author": { "name": "Sent" },
+  "homepage": "https://github.com/sentdm/agent-skills",
+  "repository": "https://github.com/sentdm/agent-skills",
+  "license": "MIT",
+  "commands": "./.claude/commands",
+  "skills": "./skills"
+}

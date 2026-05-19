@@ -1,244 +1,91 @@
+<!-- Grounded against references/_inputs/sent-docs-v3-2026-05-19.md (sections used: Dashboard pages → API endpoints map; Profile (Sender Profile) model; Authentication (v3); Webhook payload format; What is NOT in v3 docs) -->
+
 # WABA Embedded Signup — Implementation Reference
 
-Supporting reference for `waba-embedded-signup`. Captures the exact field names, example payloads, and Graph API endpoints used in a current (v23.0) integration. Authoritative source: [Embedded Signup](https://developers.facebook.com/docs/whatsapp/embedded-signup).
+Supporting reference for `waba-embedded-signup`. The Sent v3 docs snapshot (2026-05-19) confirms that **Sent does not expose a public Embedded Signup API endpoint**. The customer-facing surface for connecting WhatsApp to Sent is the **dashboard's Channels → WhatsApp tab**, which is explicitly listed in Sent's "Dashboard pages → API endpoints map" as `(dashboard config; not directly in v3 API)`. The dashboard internally initiates Meta's Facebook Login for Business / Embedded Signup flow on the tenant's behalf.
 
-> Meta bumps the Graph API version regularly. The examples below pin v23.0 because it's a current stable as of mid-2026 and gives a comfortable margin before its sunset window. Bump as Meta releases newer stable versions — the field names below have been stable since v20.0.
+What this means for an integrator:
 
-## Prerequisites Checklist
+- **You do not call a Sent endpoint to start Embedded Signup.** You direct the tenant to their Sent dashboard.
+- The Meta-side authentication, token exchange, WABA discovery, phone-number registration, app subscription, and app review state are owned by **Meta** and abstracted by the Sent dashboard. They are not surfaced as Sent API operations.
+- After dashboard completion, the WhatsApp wiring is bound to the tenant's Sender Profile and routable via Sent's normal v3 API (`POST /v3/messages`, etc.).
 
-- [ ] Tech Provider or Solution Partner approval from Meta
-- [ ] Meta App with products: **WhatsApp**, **Facebook Login for Business**
-- [ ] FBL Configuration created in App Dashboard with the WhatsApp Embedded Signup feature selected
-- [ ] `config_id` captured from the FBL config (string, treat as semi-public)
-- [ ] Redirect URIs allowlisted in the FBL config for every environment
-- [ ] App secret stored server-side; never expose to the browser
-- [ ] System User in your Meta Business with admin role on the app
-- [ ] Webhook URL configured under the WhatsApp product with a verify token
-- [ ] App signing secret stored server-side, used to verify `X-Hub-Signature-256`
+Anything below this line is **external Meta documentation context** — included only so an operator debugging a stuck dashboard flow knows what is happening behind the scenes. Authoritative source: Meta — [Embedded Signup](https://developers.facebook.com/docs/whatsapp/embedded-signup), [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api), [Facebook Login for Business](https://developers.facebook.com/docs/facebook-login/facebook-login-for-business). Meta bumps the Graph API version regularly — always check the live Meta docs for the current version, scope names, and field names.
 
-## Frontend — Launch the Dialog + Listen for `WA_EMBEDDED_SIGNUP`
+## Sent-side surface (what the API does and doesn't expose)
 
-The current SDK flow returns `waba_id` and `phone_number_id` via a `postMessage` event in addition to the OAuth code. Install the listener **before** `FB.login()` or you'll miss it.
-
-```html
-<button onclick="launchSignup()">Connect WhatsApp</button>
-
-<script async src="https://connect.facebook.net/en_US/sdk.js"></script>
-<script>
-  let sessionInfo = null;
-
-  window.addEventListener('message', (event) => {
-    // Origin check: only trust events from facebook.com.
-    if (!event.origin.endsWith('facebook.com')) return;
-    try {
-      const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
-      if (data.type !== 'WA_EMBEDDED_SIGNUP') return;
-
-      if (data.event === 'FINISH') {
-        // data.data = { phone_number_id, waba_id, business_id }
-        sessionInfo = data.data;
-      } else if (data.event === 'CANCEL') {
-        // user dismissed at data.data.current_step
-      } else if (data.event === 'ERROR') {
-        // surface data.data.error_message to the tenant
-      }
-    } catch (_) { /* ignore non-JSON messages */ }
-  });
-
-  window.fbAsyncInit = function () {
-    FB.init({
-      appId: 'YOUR_APP_ID',
-      cookie: true,
-      xfbml: false,
-      version: 'v23.0'
-    });
-  };
-
-  function launchSignup() {
-    FB.login(
-      function (response) {
-        if (response.authResponse && response.authResponse.code) {
-          // POST the code + sessionInfo to your backend; include CSRF / session.
-          fetch('/signup/whatsapp/callback', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: response.authResponse.code, session: sessionInfo })
-          });
-        }
-      },
-      {
-        config_id: 'YOUR_CONFIG_ID',
-        response_type: 'code',
-        override_default_response_type: true,
-        extras: { feature: 'whatsapp_embedded_signup', version: 3 }
-      }
-    );
-  }
-</script>
-```
-
-**Required `extras`:** `feature: 'whatsapp_embedded_signup'`. Without it the dialog runs the legacy FBL flow and you'll get back a user token without WABA scopes, and no `WA_EMBEDDED_SIGNUP` event.
-
-`extras.version: 3` opts into the current signup UI. Older `config_id`s may not honor it; fall back to `debug_token` extraction in that case.
-
-**Optional `extras`:** `setup` for pre-fill (business name, email). Useful for existing tenants who already have data on file.
-
-## Backend — Step 5: Exchange Code for Token
-
-```http
-GET https://graph.facebook.com/v23.0/oauth/access_token
-  ?client_id={APP_ID}
-  &client_secret={APP_SECRET}
-  &redirect_uri={ALLOWLISTED_URI}
-  &code={CODE_FROM_FRONTEND}
-```
-
-Response:
-```json
-{
-  "access_token": "EAAB...",
-  "token_type": "bearer",
-  "expires_in": 5184000
-}
-```
-
-This is a user token. For production, exchange to a System User token (long-lived) before persisting.
-
-## Backend — Step 5b: `debug_token` (fallback only)
-
-If the `WA_EMBEDDED_SIGNUP` event never fired (older `config_id`, blocked listener, non-default flow), you can still recover the IDs by introspecting the token:
-
-```http
-GET https://graph.facebook.com/debug_token
-  ?input_token={USER_TOKEN}
-  &access_token={APP_ID}|{APP_SECRET}
-```
-
-Response (abbreviated):
-```json
-{
-  "data": {
-    "app_id": "...",
-    "type": "USER",
-    "expires_at": 1700000000,
-    "is_valid": true,
-    "scopes": [
-      "whatsapp_business_management",
-      "whatsapp_business_messaging",
-      "business_management"
-    ],
-    "granular_scopes": [
-      { "scope": "whatsapp_business_management", "target_ids": ["WABA_ID_1"] },
-      { "scope": "whatsapp_business_messaging", "target_ids": ["WABA_ID_1"] }
-    ],
-    "user_id": "..."
-  }
-}
-```
-
-`granular_scopes` is the authoritative source of which WABA(s) the user granted access to. Cross-check it; don't trust the token alone.
-
-To enumerate owned WABAs:
-```http
-GET https://graph.facebook.com/v23.0/{business_id}/owned_whatsapp_business_accounts
-```
-
-## Backend — Phone Numbers
-
-```http
-GET https://graph.facebook.com/v23.0/{WABA_ID}?fields=id,name,owner_business_info
-```
-
-```http
-GET https://graph.facebook.com/v23.0/{WABA_ID}/phone_numbers
-```
-
-Phone-numbers response:
-```json
-{
-  "data": [
-    {
-      "id": "PHONE_NUMBER_ID",
-      "display_phone_number": "+1 555-555-0123",
-      "verified_name": "Sent Demo",
-      "code_verification_status": "VERIFIED",
-      "quality_rating": "GREEN"
-    }
-  ]
-}
-```
-
-## Backend — Step 6: Register the Phone Number
-
-```http
-POST https://graph.facebook.com/v23.0/{PHONE_NUMBER_ID}/register
-Content-Type: application/json
-Authorization: Bearer {SYSTEM_USER_TOKEN}
-
-{
-  "messaging_product": "whatsapp",
-  "pin": "123456"
-}
-```
-
-The `pin` is a 6-digit numeric PIN. Generate one per phone number, store it encrypted on the WhatsApp sender record, and reuse for any future re-registration.
-
-Response: `{ "success": true }`.
-
-## Backend — Step 7: Subscribe Your App to the WABA
-
-```http
-POST https://graph.facebook.com/v23.0/{WABA_ID}/subscribed_apps
-Authorization: Bearer {SYSTEM_USER_TOKEN}
-```
-
-Response: `{ "success": true }`.
-
-## Backend — Step 8: Verify by Reading Back
-
-```http
-GET https://graph.facebook.com/v23.0/{WABA_ID}/subscribed_apps
-```
-
-Response should include your app in `data[]`. If not, webhooks will never fire for this WABA.
-
-## Webhook Verification (one-time, for the URL itself)
-
-Meta calls your webhook URL with a verification request:
-```
-GET /webhook?hub.mode=subscribe&hub.verify_token=YOUR_TOKEN&hub.challenge=12345
-```
-Respond with the challenge value as the body when `verify_token` matches.
-
-## Webhook Signature Verification (every request)
-
-Header:
-```
-X-Hub-Signature-256: sha256=<hex>
-```
-
-Compute `HMAC-SHA256(request.raw_body, APP_SECRET)` and compare in constant time. **Reject the request if the signature doesn't match.** This is the only thing preventing spoofed webhooks.
-
-## State Transitions for the WhatsApp Sender
-
-After each Graph API call, persist the WhatsApp sender's state on its Sender Profile:
-
-| Step | New state |
+| Concern | Where it lives |
 |---|---|
-| `WA_EMBEDDED_SIGNUP FINISH` received, code received | `connecting` |
-| Token exchanged + IDs resolved | `connected` |
-| Phone number registered | `registered` |
-| App subscribed to WABA + verified read-back | `active` |
-| Any of the above fails | `failed` (with `error_code` and `error_message`) |
+| Start Embedded Signup | Dashboard → Channels → WhatsApp → "Connect" (no public Sent API) |
+| WABA / phone-number binding | Dashboard (not in v3 API) |
+| Mark profile setup complete | `POST /v3/profiles/{id}/complete` (idempotent, sensitive endpoint — 10/min, burst 5) |
+| Profile status after binding | `GET /v3/profiles/{id}` → `status` ∈ `incomplete` \| `pending_review` \| `approved` \| `rejected` |
+| Webhook config | `POST /v3/webhooks`, `PUT /v3/webhooks/{id}`, `POST /v3/webhooks/{id}/test`, `POST /v3/webhooks/{id}/rotate-secret` (sensitive — 10/min, burst 5) |
+| Auth header | `x-api-key: <UUID>` — single header, account-scoped. No `x-sender-id` in v3. |
 
-Never declare `active` until Step 8 read-back succeeds. Otherwise the tenant sees "Connected!" but no webhooks arrive.
+## Customer-facing dashboard flow (what the tenant sees)
 
-## Common Error Responses (and what to do)
+This mirrors the live flow on the dashboard's Channels page; it is what a tenant should be guided through, not an API sequence:
 
-| HTTP / code | Body excerpt | Action |
-|---|---|---|
-| 400 / `code: 100` | `Invalid OAuth access token` | Token expired or revoked; ask tenant to reconnect |
-| 400 / `code: 190` | `OAuthException` | Same as 100 |
-| 403 / `code: 200` | `Permissions error` | Granular scope missing; re-launch with the right `config_id` |
-| 500 | Empty body | Meta transient; retry with exponential backoff |
-| 4XX on `/register` | `code: 133005` or `133006` | PIN wrong, or phone number not eligible — surface to tenant |
+1. Dashboard → **Channels** → **WhatsApp** tab → click **Connect**.
+2. Meta consent popup opens (Facebook Login for Business surface, initiated by Sent).
+3. Tenant selects (or creates) a **WABA** under their Meta Business Portfolio.
+4. Tenant grants Sent permission to **manage WhatsApp messages and templates** on that WABA.
+5. Tenant adds a **Meta payment method** (separate from Sent billing — Meta charges per-conversation independently).
+6. Dashboard reflects channel setup completion; the WhatsApp wiring is bound to the tenant's Sender Profile.
+7. API credentials (the `x-api-key`) can be copied from the post-setup screen or retrieved later from the dashboard's API Keys page.
+
+The runbook (`waba-onboarding-runbook.md`) walks through this end-to-end with failure modes and recovery steps.
+
+## Webhook envelope (Sent-confirmed)
+
+After WhatsApp is connected, Sent emits webhooks for that profile's messages using the universal envelope:
+
+```json
+{
+  "field": "message",
+  "sub_type": "message.delivered",
+  "timestamp": "2026-01-15T10:35:00+00:00",
+  "payload": {
+    "account_id": "<UUID>",
+    "message_id": "<UUID>",
+    "message_status": "DELIVERED",
+    "channel": "whatsapp",
+    "inbound_number": "+1...",
+    "outbound_number": "+1...",
+    "template_id": "<UUID>"
+  }
+}
+```
+
+Sub-types follow `<field>.<event>` (`message.queued`, `message.routed`, `message.sent`, `message.delivered`, `message.failed`, and on WhatsApp/RCS only, `message.read`).
+
+WhatsApp-specific sub-types beyond the universal `message.*` family (e.g., template approval/rejection notifications) are not enumerated in the v3 snapshot. To discover what your account currently subscribes to:
+
+1. List configured webhooks: `GET /v3/webhooks`.
+2. Inspect a single webhook's `event_types` and `event_filters` fields.
+3. Subscribe broadly to the `message` parent type and observe what arrives in production — fold the observed sub-types into your routing.
+
+## Webhook signature verification
+
+The webhook model (verified) exposes `signing_secret` as a per-webhook field; the exact HMAC algorithm and header name are not specified in the snapshot. Rotate via `POST /v3/webhooks/{id}/rotate-secret` — the old secret is invalidated immediately, so coordinate with the receiver before rotating.
+
+## Meta-side context (for operators only — link, do not reimplement)
+
+When a dashboard tenant is stuck and you need to know what the dashboard is doing on their behalf, the underlying Meta flow looks like this — read Meta's docs for current details:
+
+- Meta app type, Tech Provider / Solution Partner status, granular scopes, Graph version, redirect URI allowlisting → [Embedded Signup docs](https://developers.facebook.com/docs/whatsapp/embedded-signup).
+- OAuth code → System User token exchange → [Facebook Login for Business](https://developers.facebook.com/docs/facebook-login/facebook-login-for-business).
+- WABA / phone-number lookup, phone-number registration with PIN, app subscription to WABA → [WhatsApp Cloud API](https://developers.facebook.com/docs/whatsapp/cloud-api).
+- App review state, business verification, payment method, quality rating → Meta Business Suite UI.
+
+If a tenant is genuinely operating their own Meta app (not using the Sent-managed dashboard flow), they own all of the above and should be referred to Meta's docs directly. Sent's API does not replace that.
+
+## What is not in the v3 docs snapshot
+
+- The exact shape of the request body for `POST /v3/profiles/{id}/complete` for WhatsApp wiring (the snapshot confirms the endpoint exists and is sensitive; the per-channel payload is not published).
+- The webhook signature algorithm / header used to verify Sent → receiver deliveries.
+- The mapping shape between Sender Profile and the WABA / phone-number IDs the dashboard binds to it.
+- WhatsApp-specific webhook sub-types (e.g., template lifecycle events).
+
+Treat each of these as "discover via your account" rather than "code to a spec".
